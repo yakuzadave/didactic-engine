@@ -7,8 +7,14 @@ Transcribes audio to MIDI using Spotify's Basic Pitch model.
 import os
 from typing import Optional
 import numpy as np
-from basic_pitch.inference import predict
-from basic_pitch import ICASSP_2022_MODEL_PATH
+
+try:
+    from basic_pitch.inference import predict
+    from basic_pitch import ICASSP_2022_MODEL_PATH
+    BASIC_PITCH_AVAILABLE = True
+except ImportError:
+    BASIC_PITCH_AVAILABLE = False
+    ICASSP_2022_MODEL_PATH = None
 
 
 class MIDITranscriber:
@@ -20,7 +26,15 @@ class MIDITranscriber:
 
         Args:
             model_path: Path to Basic Pitch model. If None, uses default.
+        
+        Raises:
+            ImportError: If basic_pitch is not installed.
         """
+        if not BASIC_PITCH_AVAILABLE:
+            raise ImportError(
+                "basic-pitch is not installed. Install it with: pip install basic-pitch"
+            )
+        
         self.model_path = model_path or ICASSP_2022_MODEL_PATH
 
     def transcribe(

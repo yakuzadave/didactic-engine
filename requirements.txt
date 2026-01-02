@@ -12,5 +12,5 @@ demucs>=4.0.0
 basic-pitch>=0.2.0
 pretty-midi>=0.2.10
 
-# Advanced audio analysis (optional)
-essentia>=2.1b6
+# Advanced audio analysis (optional - install separately if needed)
+# essentia>=2.1b6

@@ -11,6 +11,12 @@ from typing import Dict, List, Optional
 import numpy as np
 import soundfile as sf
 
+try:
+    import demucs
+    DEMUCS_AVAILABLE = True
+except ImportError:
+    DEMUCS_AVAILABLE = False
+
 
 class StemSeparator:
     """Separate audio into stems using Demucs."""
@@ -41,6 +47,10 @@ class StemSeparator:
         Returns:
             Dictionary mapping stem names to audio arrays.
         """
+        if not DEMUCS_AVAILABLE:
+            print("Warning: Demucs not installed. Using mock stem separation.")
+            return self._create_mock_stems(audio, sample_rate)
+        
         # Create temporary directory if needed
         if output_dir is None:
             output_dir = tempfile.mkdtemp()
