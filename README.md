@@ -236,6 +236,7 @@ ruff check src/
 - demucs (for stem separation)
 - basic-pitch (for MIDI transcription, Python 3.11 only)
 - onnxruntime (for ONNX model inference, Python 3.12+ compatible)
+- torchcodec (required by torchaudio 2.9+ for audio encoding/saving)
 
 ## License
 
