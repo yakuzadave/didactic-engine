@@ -77,17 +77,27 @@ if is_onnxruntime_available():
 
 ### Command Line Interface
 
-Process a WAV file:
+#### Process a single WAV file:
 
 ```bash
 didactic-engine --wav input.wav --song-id my_song --out data/
+```
+
+#### Process multiple WAV files (batch mode):
+
+```bash
+# Process multiple files with auto-generated song IDs
+didactic-engine --wav song1.wav song2.wav song3.wav --out data/
+
+# Process all WAV files in a directory
+didactic-engine --wav *.wav --out data/
 ```
 
 With custom options:
 
 ```bash
 didactic-engine --wav input.wav --song-id my_song --out data/ \
-    --sr 44100 \
+    --sr 22050 \
     --ts-num 4 \
     --ts-den 4 \
     --use-essentia
@@ -100,6 +110,8 @@ didactic-engine --help
 ```
 
 ### Python API
+
+#### Single file processing:
 
 ```python
 from didactic_engine import AudioPipeline, PipelineConfig
@@ -120,6 +132,29 @@ cfg = PipelineConfig(
 # Run pipeline
 pipeline = AudioPipeline(cfg)
 results = pipeline.run()
+```
+
+#### Batch processing:
+
+```python
+from didactic_engine.pipeline import AudioPipeline
+from pathlib import Path
+
+# Process multiple files
+input_files = [
+    Path("song1.wav"),
+    Path("song2.wav"),
+    Path("song3.wav"),
+]
+
+results = AudioPipeline.process_batch(
+    input_files,
+    out_dir=Path("data"),
+    analysis_sr=22050,
+    use_essentia_features=False,
+)
+
+print(f"Processed {results['success_count']}/{results['total']} files")
 ```
 
 ### Using Individual Components

@@ -2,8 +2,10 @@
 Example script demonstrating the didactic-engine audio processing pipeline.
 """
 
-import os
+
+from pathlib import Path
 from didactic_engine.pipeline import AudioPipeline
+from didactic_engine.config import PipelineConfig
 
 
 def example_basic_usage():
@@ -12,31 +14,34 @@ def example_basic_usage():
     print("Example 1: Basic Usage")
     print("="*60)
     
-    # Initialize pipeline with default settings
-    pipeline = AudioPipeline(
-        sample_rate=44100,
-        use_essentia=False,
-        preprocess_stems=True,
-        beats_per_bar=4,
-    )
-    
-    # Process a WAV file
-    input_wav = "path/to/your/audio.wav"
-    output_dir = "output/basic_example"
+    # Define paths
+    input_wav = Path("path/to/your/audio.wav")
+    output_dir = Path("output/basic_example")
     
     # Check if example file exists
-    if not os.path.exists(input_wav):
+    if not input_wav.exists():
         print(f"Note: Create or specify a WAV file at: {input_wav}")
         print("Skipping execution - this is just an example structure.")
         return
     
-    results = pipeline.process(input_wav, output_dir)
+    # Create configuration
+    cfg = PipelineConfig(
+        song_id="my_song",
+        input_wav=input_wav,
+        out_dir=output_dir,
+        analysis_sr=22050,  # Sample rate for analysis
+        use_essentia_features=False,
+        write_bar_chunks=True,
+    )
+    
+    # Initialize and run pipeline
+    pipeline = AudioPipeline(cfg)
+    results = pipeline.run()
     
     print("\nResults:")
-    print(f"  - Tempo: {results['analysis']['tempo']:.2f} BPM")
-    print(f"  - Number of bars: {len(results['bar_times'])}")
-    print(f"  - Stems separated: {results['stem_names']}")
-    print(f"  - Total notes in MIDI: {results.get('midi_info', {}).get('total_notes', 0)}")
+    print(f"  - Tempo: {results['analysis']['tempo_bpm']:.2f} BPM")
+    print(f"  - Number of bars: {results['num_bars']}")
+    print(f"  - Stems: {results.get('stems', [])}")
 
 
 def example_advanced_usage():
@@ -45,30 +50,32 @@ def example_advanced_usage():
     print("Example 2: Advanced Usage with Essentia")
     print("="*60)
     
-    # Initialize pipeline with Essentia enabled
-    pipeline = AudioPipeline(
-        sample_rate=48000,
-        use_essentia=True,  # Enable advanced analysis
-        preprocess_stems=True,
-        beats_per_bar=4,
-    )
+    input_wav = Path("path/to/your/audio.wav")
+    output_dir = Path("output/advanced_example")
     
-    input_wav = "path/to/your/audio.wav"
-    output_dir = "output/advanced_example"
-    
-    if not os.path.exists(input_wav):
+    if not input_wav.exists():
         print("Note: Specify a valid WAV file path")
         return
     
-    results = pipeline.process(input_wav, output_dir)
+    # Create configuration with Essentia enabled
+    cfg = PipelineConfig(
+        song_id="my_song_advanced",
+        input_wav=input_wav,
+        out_dir=output_dir,
+        analysis_sr=22050,
+        use_essentia_features=True,  # Enable advanced analysis
+        write_bar_chunks=True,
+        time_signature_num=4,
+        time_signature_den=4,
+    )
     
-    # Access Essentia-specific features
-    if "essentia" in results["analysis"]:
-        essentia_results = results["analysis"]["essentia"]
-        print(f"\nEssentia Analysis:")
-        print(f"  - Key: {essentia_results.get('key', 'N/A')}")
-        print(f"  - Scale: {essentia_results.get('scale', 'N/A')}")
-        print(f"  - BPM: {essentia_results.get('bpm', 'N/A')}")
+    # Run pipeline
+    pipeline = AudioPipeline(cfg)
+    results = pipeline.run()
+    
+    print(f"\nProcessed: {results['song_id']}")
+    print(f"Duration: {results['duration_s']:.2f}s")
+    print(f"Tempo: {results['analysis']['tempo_bpm']:.2f} BPM")
 
 
 def example_batch_processing():
@@ -77,25 +84,35 @@ def example_batch_processing():
     print("Example 3: Batch Processing")
     print("="*60)
     
-    pipeline = AudioPipeline()
-    
     # Process multiple files
     input_files = [
-        "path/to/audio1.wav",
-        "path/to/audio2.wav",
-        "path/to/audio3.wav",
+        Path("path/to/audio1.wav"),
+        Path("path/to/audio2.wav"),
+        Path("path/to/audio3.wav"),
     ]
-    output_base_dir = "output/batch_example"
+    output_base_dir = Path("output/batch_example")
     
     # Check if files exist
-    existing_files = [f for f in input_files if os.path.exists(f)]
+    existing_files = [f for f in input_files if f.exists()]
     if not existing_files:
         print("Note: Add valid WAV file paths to process")
         return
     
-    results = pipeline.process_batch(existing_files, output_base_dir)
+    # Process batch using static method
+    results = AudioPipeline.process_batch(
+        existing_files,
+        output_base_dir,
+        analysis_sr=22050,
+        use_essentia_features=False,
+    )
     
-    print(f"\nProcessed {len(results)} files successfully")
+    print(f"\nProcessed {results['success_count']} files successfully")
+    print(f"Failed: {results['failure_count']} files")
+    
+    if results['failed']:
+        print("\nFailed files:")
+        for song_id, path, error in results['failed']:
+            print(f"  - {song_id}: {error}")
 
 
 def example_custom_configuration():
@@ -105,18 +122,24 @@ def example_custom_configuration():
     print("="*60)
     
     # Custom pipeline configuration
-    pipeline = AudioPipeline(
-        sample_rate=48000,        # Higher sample rate
-        use_essentia=True,         # Advanced analysis
-        preprocess_stems=True,     # Apply normalization
-        beats_per_bar=3,          # 3/4 time signature (waltz)
+    cfg = PipelineConfig(
+        song_id="waltz_song",
+        input_wav=Path("path/to/waltz.wav"),
+        out_dir=Path("output/custom_example"),
+        analysis_sr=22050,
+        use_essentia_features=True,
+        write_bar_chunks=True,
+        time_signature_num=3,  # 3/4 time signature (waltz)
+        time_signature_den=4,
+        use_pydub_preprocess=True,
+        preprocess_target_sr=44100,
     )
     
     print("Pipeline configured with:")
-    print(f"  - Sample rate: {pipeline.sample_rate} Hz")
-    print(f"  - Essentia enabled: {pipeline.use_essentia}")
-    print(f"  - Preprocessing: {pipeline.preprocess_stems}")
-    print(f"  - Beats per bar: {pipeline.beats_per_bar}")
+    print(f"  - Sample rate: {cfg.analysis_sr} Hz")
+    print(f"  - Preprocess target SR: {cfg.preprocess_target_sr} Hz")
+    print(f"  - Essentia enabled: {cfg.use_essentia_features}")
+    print(f"  - Time signature: {cfg.time_signature_num}/{cfg.time_signature_den}")
 
 
 def example_accessing_components():
@@ -130,13 +153,13 @@ def example_accessing_components():
     from didactic_engine.features import FeatureExtractor
     
     # Use individual components
-    ingester = WAVIngester(sample_rate=44100)
+    ingester = WAVIngester(sample_rate=22050)
     analyzer = AudioAnalyzer(use_essentia=False)
     feature_extractor = FeatureExtractor()
     
-    input_wav = "path/to/audio.wav"
+    input_wav = Path("path/to/audio.wav")
     
-    if not os.path.exists(input_wav):
+    if not input_wav.exists():
         print("Note: Specify a valid WAV file to run this example")
         return
     

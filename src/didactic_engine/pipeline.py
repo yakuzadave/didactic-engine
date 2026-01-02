@@ -7,7 +7,7 @@ Orchestrates the complete audio processing workflow from ingestion to feature ex
 import json
 import shutil
 from pathlib import Path
-from typing import Dict, List, Any, TYPE_CHECKING
+from typing import Dict, List, Any, Optional, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -332,6 +332,120 @@ class AudioPipeline:
         print("=" * 60)
 
         return results
+
+    @staticmethod
+    def process_batch(
+        input_files: List[Path],
+        out_dir: Path,
+        song_ids: Optional[List[str]] = None,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """
+        Process multiple WAV files in batch mode.
+
+        Args:
+            input_files: List of input WAV file paths.
+            out_dir: Base output directory for all results.
+            song_ids: Optional list of song IDs (one per file). If not provided,
+                     filenames (without extension) are used as song IDs.
+            **kwargs: Additional configuration parameters passed to PipelineConfig
+                     (e.g., analysis_sr, use_essentia_features, etc.)
+
+        Returns:
+            Dictionary containing:
+                - 'successful': List of (song_id, input_path, result_dict) tuples
+                - 'failed': List of (song_id, input_path, error_message) tuples
+                - 'total': Total number of files processed
+                - 'success_count': Number of successful processings
+                - 'failure_count': Number of failed processings
+
+        Example:
+            >>> from pathlib import Path
+            >>> from didactic_engine.pipeline import AudioPipeline
+            >>> 
+            >>> files = [Path("song1.wav"), Path("song2.wav")]
+            >>> results = AudioPipeline.process_batch(
+            ...     files,
+            ...     Path("output"),
+            ...     analysis_sr=22050,
+            ...     use_essentia_features=False
+            ... )
+            >>> print(f"Processed {results['success_count']} files successfully")
+        """
+        # Import here to avoid circular imports at module load time.
+        # config.py doesn't import pipeline.py, but keeping this pattern
+        # ensures flexibility if the dependency structure changes in the future.
+        from didactic_engine.config import PipelineConfig
+        
+        # Validate input_files is not empty
+        if not input_files:
+            raise ValueError("input_files list cannot be empty")
+        
+        if song_ids is None:
+            song_ids = [f.stem for f in input_files]
+        
+        if len(song_ids) != len(input_files):
+            raise ValueError(
+                f"Number of song_ids ({len(song_ids)}) must match "
+                f"number of input_files ({len(input_files)})"
+            )
+        
+        successful = []
+        failed = []
+        
+        print(f"Batch processing {len(input_files)} files...")
+        
+        for idx, (input_file, song_id) in enumerate(zip(input_files, song_ids), 1):
+            print(f"\n[{idx}/{len(input_files)}] Processing: {input_file.name} ({song_id})")
+            
+            try:
+                # Validate file exists
+                if not input_file.exists():
+                    raise FileNotFoundError(f"Input file not found: {input_file}")
+                
+                # Create configuration for this file
+                cfg = PipelineConfig(
+                    song_id=song_id,
+                    input_wav=input_file,
+                    out_dir=out_dir,
+                    **kwargs
+                )
+                
+                # Process the file
+                pipeline = AudioPipeline(cfg)
+                result = pipeline.run()
+                
+                successful.append((song_id, str(input_file), result))
+                print(f"  ✓ Completed successfully")
+            
+            except FileNotFoundError as e:
+                # Handle expected missing-file errors explicitly so tests and callers
+                # can distinguish them from other processing failures.
+                error_msg = f"File not found: {e}"
+                failed.append((song_id, str(input_file), error_msg))
+                print(f"  ✗ Failed (missing file): {error_msg}")
+            
+            except Exception as e:
+                # Preserve batch robustness while keeping the exception type visible
+                # in the recorded error message for easier debugging and validation.
+                error_msg = f"{type(e).__name__}: {e}"
+                failed.append((song_id, str(input_file), error_msg))
+                print(f"  ✗ Failed: {error_msg}")
+        
+        # Return summary
+        summary = {
+            "successful": successful,
+            "failed": failed,
+            "total": len(input_files),
+            "success_count": len(successful),
+            "failure_count": len(failed),
+        }
+        
+        print("\n" + "=" * 60)
+        print(f"Batch processing complete: {summary['success_count']}/{summary['total']} successful")
+        print("=" * 60)
+        
+        return summary
 
 
 def run_all(cfg: "PipelineConfig") -> Dict[str, Any]:
