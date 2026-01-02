@@ -375,5 +375,83 @@ class TestUtilsFlatten:
         assert flat["d"] == 3
 
 
+class TestONNXInference:
+    """Test ONNX Runtime inference module."""
+
+    def test_onnxruntime_availability_check(self):
+        """Test ONNX Runtime availability checking."""
+        from didactic_engine.onnx_inference import is_onnxruntime_available
+
+        # Function should return a boolean
+        result = is_onnxruntime_available()
+        assert isinstance(result, bool)
+
+    def test_onnxruntime_version(self):
+        """Test ONNX Runtime version retrieval."""
+        from didactic_engine.onnx_inference import (
+            is_onnxruntime_available,
+            get_onnxruntime_version,
+        )
+
+        version = get_onnxruntime_version()
+
+        if is_onnxruntime_available():
+            # Should return a version string
+            assert version is not None
+            assert isinstance(version, str)
+            assert len(version) > 0
+        else:
+            # Should return None if not installed
+            assert version is None
+
+    def test_get_available_providers(self):
+        """Test getting available ONNX execution providers."""
+        from didactic_engine.onnx_inference import (
+            is_onnxruntime_available,
+            get_available_providers,
+        )
+
+        providers = get_available_providers()
+
+        # Should always return a list
+        assert isinstance(providers, list)
+
+        if is_onnxruntime_available():
+            # Should have at least CPU provider
+            assert len(providers) > 0
+            assert 'CPUExecutionProvider' in providers
+        else:
+            # Should return empty list if not installed
+            assert providers == []
+
+    def test_inference_session_without_model(self):
+        """Test ONNXInferenceSession raises error for missing model."""
+        from didactic_engine.onnx_inference import (
+            is_onnxruntime_available,
+            ONNXInferenceSession,
+        )
+
+        if not is_onnxruntime_available():
+            # Should raise RuntimeError if onnxruntime not installed
+            with pytest.raises(RuntimeError):
+                ONNXInferenceSession("/nonexistent/model.onnx")
+        else:
+            # Should raise FileNotFoundError for missing model file
+            with pytest.raises(FileNotFoundError):
+                ONNXInferenceSession("/nonexistent/model.onnx")
+
+    def test_create_inference_session_without_onnx(self):
+        """Test create_inference_session error handling."""
+        from didactic_engine.onnx_inference import (
+            is_onnxruntime_available,
+            create_inference_session,
+        )
+
+        if not is_onnxruntime_available():
+            # Should raise RuntimeError if onnxruntime not installed
+            with pytest.raises(RuntimeError):
+                create_inference_session("/nonexistent/model.onnx")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
