@@ -40,14 +40,19 @@ def align_notes_to_grid(
     else:
         beat_interval = 60.0 / tempo_bpm if tempo_bpm > 0 else 0.5
 
-    # Extend beat array to cover audio duration
+    # Extend beat array to cover audio duration (vectorized for performance)
     if audio_duration_s and len(beat_array) > 0:
         max_needed = audio_duration_s
         if notes_df["end_s"].max() > max_needed:
             max_needed = notes_df["end_s"].max()
 
-        while beat_array[-1] < max_needed:
-            beat_array = np.append(beat_array, beat_array[-1] + beat_interval)
+        last_beat = beat_array[-1]
+        if last_beat < max_needed:
+            # Calculate number of beats needed
+            num_extra_beats = int(np.ceil((max_needed - last_beat) / beat_interval))
+            # Generate extra beats using vectorized operation
+            extra_beats = last_beat + np.arange(1, num_extra_beats + 1) * beat_interval
+            beat_array = np.concatenate([beat_array, extra_beats])
 
     # Compute beats per bar
     beats_per_bar = ts_num * (4.0 / ts_den)

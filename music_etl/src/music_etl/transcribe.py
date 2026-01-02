@@ -8,13 +8,15 @@ from pathlib import Path
 import time
 
 
-def transcribe_to_midi(wav_path: Path, midi_output_dir: Path) -> Path:
+def transcribe_to_midi(wav_path: Path, midi_output_dir: Path, timeout: int | None = None) -> Path:
     """
     Transcribe audio to MIDI using Basic Pitch.
 
     Args:
         wav_path: Path to input WAV file
         midi_output_dir: Directory to save MIDI file
+        timeout: Timeout in seconds. If None, calculated based on file size
+                 (roughly 30s per MB, minimum 180s, maximum 900s).
 
     Returns:
         Path to generated MIDI file
@@ -32,6 +34,12 @@ def transcribe_to_midi(wav_path: Path, midi_output_dir: Path) -> Path:
 
     midi_output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Calculate timeout based on file size if not provided
+    if timeout is None:
+        file_size_mb = wav_path.stat().st_size / (1024 * 1024)
+        # Roughly 30 seconds per MB, minimum 3 minutes, maximum 15 minutes
+        timeout = max(180, min(900, int(file_size_mb * 30)))
+
     # Run basic-pitch
     cmd = [
         "basic-pitch",
@@ -44,12 +52,12 @@ def transcribe_to_midi(wav_path: Path, midi_output_dir: Path) -> Path:
 
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, check=True, timeout=300
+            cmd, capture_output=True, text=True, check=True, timeout=timeout
         )
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"Basic Pitch failed: {e.stderr}") from e
     except subprocess.TimeoutExpired as e:
-        raise RuntimeError("Basic Pitch timed out after 5 minutes") from e
+        raise RuntimeError(f"Basic Pitch timed out after {timeout} seconds") from e
 
     # Find newest .mid file in output directory
     midi_files = list(midi_output_dir.rglob("*.mid"))

@@ -39,10 +39,15 @@ def compute_bar_boundaries(
     else:
         beat_interval = 60.0 / tempo_bpm if tempo_bpm > 0 else 0.5
 
-    # Extend beats to audio duration
-    if audio_duration_s:
-        while beat_array[-1] < audio_duration_s:
-            beat_array = np.append(beat_array, beat_array[-1] + beat_interval)
+    # Extend beats to audio duration (vectorized for performance)
+    if audio_duration_s and len(beat_array) > 0:
+        last_beat = beat_array[-1]
+        if last_beat < audio_duration_s:
+            # Calculate number of beats needed
+            num_extra_beats = int(np.ceil((audio_duration_s - last_beat) / beat_interval))
+            # Generate extra beats using vectorized operation
+            extra_beats = last_beat + np.arange(1, num_extra_beats + 1) * beat_interval
+            beat_array = np.concatenate([beat_array, extra_beats])
 
     # Compute beats per bar
     beats_per_bar = ts_num * (4.0 / ts_den)

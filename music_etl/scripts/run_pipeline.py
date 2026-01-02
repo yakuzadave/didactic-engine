@@ -60,6 +60,18 @@ Examples:
         help="Demucs model to use (default: htdemucs)",
     )
     parser.add_argument(
+        "--two-stems",
+        type=str,
+        default=None,
+        help="Only separate vocals/accompaniment (e.g., 'vocals'). Omit for full 4-stem separation.",
+    )
+    parser.add_argument(
+        "--demucs-timeout",
+        type=int,
+        default=None,
+        help="Demucs timeout in seconds (default: auto-calculated based on file size)",
+    )
+    parser.add_argument(
         "--sr",
         type=int,
         default=22050,
@@ -116,6 +128,8 @@ Examples:
         time_signature_num=args.ts_num,
         time_signature_den=args.ts_den,
         demucs_model=args.demucs_model,
+        demucs_two_stems=args.two_stems,
+        demucs_timeout=args.demucs_timeout,
         use_pydub_preprocess=not args.no_preprocess,
         use_essentia_features=not args.no_essentia,
         write_bar_chunks=not args.no_chunks,

@@ -34,8 +34,10 @@ class PipelineConfig:
     silence_thresh_dbfs: int = -50
     keep_silence_ms: int = 100
 
-    # Demucs model
+    # Demucs model and separation options
     demucs_model: str = "htdemucs"
+    demucs_two_stems: str | None = None  # If set (e.g., "vocals"), only separate vocals/accompaniment
+    demucs_timeout: int | None = None  # Timeout in seconds, auto-calculated if None
 
     @property
     def stems_dir(self) -> Path:

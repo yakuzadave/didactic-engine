@@ -46,7 +46,13 @@ def run_all(cfg: PipelineConfig) -> None:
 
     # Step 1: Separate stems with Demucs
     print("Step 1: Separating stems with Demucs...")
-    stems_map = run_demucs(cfg.input_wav, cfg.stems_dir, cfg.demucs_model)
+    stems_map = run_demucs(
+        cfg.input_wav,
+        cfg.stems_dir,
+        cfg.demucs_model,
+        two_stems=cfg.demucs_two_stems,
+        timeout=cfg.demucs_timeout,
+    )
     print(f"  Found {len(stems_map)} stems: {list(stems_map.keys())}")
 
     # Step 2: Optional preprocessing
@@ -116,11 +122,25 @@ def run_all(cfg: PipelineConfig) -> None:
                     if cfg.use_essentia_features:
                         chunk_essentia = extract_essentia_features(chunk_path, cfg.analysis_sr)
                         if chunk_essentia.get("available"):
-                            # Flatten essentia features
-                            flat_essentia = flatten_dict(
-                                {k: v for k, v in chunk_essentia.items() if not isinstance(v, list)},
-                                parent_key="essentia"
-                            )
+                            # Flatten essentia features, keeping scalar values and select statistics
+                            essentia_to_flatten = {}
+                            for k, v in chunk_essentia.items():
+                                if isinstance(v, (int, float, bool)):
+                                    # Keep scalar values
+                                    essentia_to_flatten[k] = v
+                                elif isinstance(v, list) and len(v) > 0:
+                                    # For lists, compute basic statistics
+                                    import numpy as np
+                                    try:
+                                        arr = np.array(v)
+                                        if arr.dtype.kind in 'biufc':  # numeric types
+                                            essentia_to_flatten[f"{k}_mean"] = float(np.mean(arr))
+                                            essentia_to_flatten[f"{k}_std"] = float(np.std(arr))
+                                    except (ValueError, TypeError):
+                                        # Skip non-numeric lists
+                                        pass
+                            
+                            flat_essentia = flatten_dict(essentia_to_flatten, parent_key="essentia")
                             chunk_features.update(flat_essentia)
 
                     # Build row
