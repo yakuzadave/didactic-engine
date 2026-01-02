@@ -47,6 +47,7 @@ dev = [
     "pytest-cov>=4.0.0",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
+    "marimo>=0.18.0",
 ]
 all = [
     "demucs>=4.0.0",

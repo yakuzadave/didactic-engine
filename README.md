@@ -146,13 +146,25 @@ normalized = preprocessor.normalize(audio, sr)
 
 ## Tutorial and Examples
 
-### Interactive Tutorial (Jupyter Notebook)
+### Interactive Tutorials
 
-We provide a comprehensive Jupyter notebook that demonstrates installation and usage:
+We provide comprehensive interactive tutorials in multiple formats:
+
+#### Jupyter Notebook (Google Colab Compatible)
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/yakuzadave/didactic-engine/blob/main/examples/tutorial.ipynb)
 
-**[examples/tutorial.ipynb](examples/tutorial.ipynb)** - Interactive tutorial covering:
+**[examples/tutorial.ipynb](examples/tutorial.ipynb)** - Traditional Jupyter notebook format
+
+#### Marimo Notebook (Pure Python, Git-Friendly)
+
+**[examples/tutorial_marimo.py](examples/tutorial_marimo.py)** - Lightweight, reactive notebook
+
+Run with: `marimo edit examples/tutorial_marimo.py`
+
+Learn more: **[examples/MARIMO_README.md](examples/MARIMO_README.md)**
+
+Both tutorials cover:
 - Installation (local and Google Colab)
 - Basic usage examples
 - Individual component usage
