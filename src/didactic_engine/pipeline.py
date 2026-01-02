@@ -7,7 +7,7 @@ Orchestrates the complete audio processing workflow from ingestion to feature ex
 import json
 import shutil
 from pathlib import Path
-from typing import Dict, List, Any, TYPE_CHECKING
+from typing import Dict, List, Any, Optional, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -337,7 +337,7 @@ class AudioPipeline:
     def process_batch(
         input_files: List[Path],
         out_dir: Path,
-        song_ids: List[str] = None,
+        song_ids: Optional[List[str]] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -376,6 +376,10 @@ class AudioPipeline:
         # config.py doesn't import pipeline.py, but keeping this pattern
         # ensures flexibility if the dependency structure changes in the future.
         from didactic_engine.config import PipelineConfig
+        
+        # Validate input_files is not empty
+        if not input_files:
+            raise ValueError("input_files list cannot be empty")
         
         if song_ids is None:
             song_ids = [f.stem for f in input_files]

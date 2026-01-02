@@ -537,6 +537,14 @@ class TestBatchProcessing:
             song_ids_used = [item[0] for item in results["successful"]]
             assert "song_alpha" in song_ids_used
             assert "song_beta" in song_ids_used
+            
+            # Verify output directories are created with custom song IDs
+            assert (output_dir / "input" / "song_alpha").exists()
+            assert (output_dir / "input" / "song_beta").exists()
+            assert (output_dir / "preprocessed" / "song_alpha").exists()
+            assert (output_dir / "preprocessed" / "song_beta").exists()
+            assert (output_dir / "analysis" / "song_alpha").exists()
+            assert (output_dir / "analysis" / "song_beta").exists()
 
     def test_batch_processing_with_missing_file(self):
         """Test batch processing handles missing files gracefully."""
@@ -572,6 +580,12 @@ class TestBatchProcessing:
             assert results["failure_count"] == 1
             assert len(results["successful"]) == 1
             assert len(results["failed"]) == 1
+            
+            # Verify error information for missing file
+            failed_song_id, failed_path, error_msg = results["failed"][0]
+            assert failed_song_id == "missing"
+            assert "missing.wav" in failed_path
+            assert "File not found" in error_msg or "not found" in error_msg.lower()
 
     def test_batch_processing_song_ids_mismatch(self):
         """Test that mismatched song_ids count raises ValueError."""
@@ -593,6 +607,18 @@ class TestBatchProcessing:
                     input_files,
                     output_dir,
                     song_ids=wrong_ids,
+                )
+
+    def test_batch_processing_empty_input_files(self):
+        """Test that empty input_files list raises ValueError."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            output_dir = tmpdir_path / "output"
+            
+            with pytest.raises(ValueError, match="cannot be empty"):
+                AudioPipeline.process_batch(
+                    [],
+                    output_dir,
                 )
 
 

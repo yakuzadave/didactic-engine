@@ -128,7 +128,12 @@ Examples:
     if len(wav_files) > 1:
         # Warn if song_id is provided in batch mode
         if args.song_id:
-            print("Warning: --song-id is ignored in batch mode. Song IDs will be auto-generated from filenames.", file=sys.stderr)
+            print(
+                "Warning: --song-id is ignored in batch mode. "
+                "Song IDs are auto-generated from each input filename "
+                "(basename without extension).",
+                file=sys.stderr,
+            )
         
         print("=" * 60)
         print("Didactic Engine - Batch Processing Mode")
@@ -137,56 +142,40 @@ Examples:
         print(f"Output directory: {args.out}")
         print("=" * 60)
         
-        results = []
-        errors = []
+        # Use AudioPipeline.process_batch() to handle batch processing
+        from didactic_engine.pipeline import AudioPipeline
         
-        for idx, wav_file in enumerate(wav_files, 1):
-            # Auto-generate song_id from filename
-            song_id = wav_file.stem
-            
-            print(f"\n[{idx}/{len(wav_files)}] Processing: {wav_file.name}")
-            print(f"  Song ID: {song_id}")
-            
-            # Build PipelineConfig for this file
-            cfg = PipelineConfig(
-                song_id=song_id,
-                input_wav=wav_file,
-                out_dir=args.out,
-                demucs_model=args.demucs_model,
-                analysis_sr=args.sr,
-                hop_length=args.hop,
-                time_signature_num=args.ts_num,
-                time_signature_den=args.ts_den,
-                use_pydub_preprocess=not args.no_preprocess,
-                use_essentia_features=args.use_essentia,
-                write_bar_chunks=not args.no_bar_chunks,
-            )
-            
-            try:
-                run_all(cfg)
-                results.append((song_id, wav_file, "SUCCESS"))
-                print(f"  ✓ Completed successfully")
-            except Exception as e:
-                errors.append((song_id, wav_file, str(e)))
-                print(f"  ✗ Failed: {e}", file=sys.stderr)
+        batch_results = AudioPipeline.process_batch(
+            wav_files,
+            args.out,
+            demucs_model=args.demucs_model,
+            analysis_sr=args.sr,
+            hop_length=args.hop,
+            time_signature_num=args.ts_num,
+            time_signature_den=args.ts_den,
+            use_pydub_preprocess=not args.no_preprocess,
+            use_essentia_features=args.use_essentia,
+            write_bar_chunks=not args.no_bar_chunks,
+        )
         
         # Print summary
         print("\n" + "=" * 60)
         print("Batch Processing Summary")
         print("=" * 60)
-        print(f"Total files: {len(wav_files)}")
-        print(f"Successful: {len(results)}")
-        print(f"Failed: {len(errors)}")
+        print(f"Total files: {batch_results['total']}")
+        print(f"Successful: {batch_results['success_count']}")
+        print(f"Failed: {batch_results['failure_count']}")
         
-        if errors:
+        if batch_results['failed']:
             print("\nFailed files:")
-            for song_id, wav_file, error in errors:
-                print(f"  - {wav_file.name} ({song_id}): {error}")
+            for song_id, input_path, error in batch_results['failed']:
+                filename = Path(input_path).name
+                print(f"  - {filename} ({song_id}): {error}")
         
         print(f"\nResults saved to: {args.out}")
         print("=" * 60)
         
-        return 1 if errors else 0
+        return 1 if batch_results['failed'] else 0
     
     # Single file processing
     else:
