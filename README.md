@@ -75,6 +75,27 @@ if is_onnxruntime_available():
 
 ## Usage
 
+### Quickstart Demo
+
+The fastest way to get started:
+
+```bash
+# Process a single file and generate visualizations
+python examples/quickstart_demo.py path/to/audio.wav
+
+# Process with custom output directory
+python examples/quickstart_demo.py audio.wav --output my_output/
+
+# Process without visualizations (faster)
+python examples/quickstart_demo.py audio.wav --no-viz
+```
+
+This will:
+1. Process the audio file (ingestion, analysis, feature extraction)
+2. Generate interactive HTML visualizations
+3. Display summary statistics
+4. Show output directory structure
+
 ### Command Line Interface
 
 #### Process a single WAV file:
@@ -91,6 +112,17 @@ didactic-engine --wav song1.wav song2.wav song3.wav --out data/
 
 # Process all WAV files in a directory
 didactic-engine --wav *.wav --out data/
+```
+
+Note: CLI batch processing runs files sequentially by default. For parallel processing, use an
+external tool like GNU parallel or the provided multiprocessing workflow script:
+
+```bash
+# GNU parallel (example)
+parallel didactic-engine --wav {} --out data/ ::: *.wav
+
+# Python multiprocessing workflow (example)
+python examples/workflow_batch_viz.py *.wav --workers 8 --output data/
 ```
 
 With custom options:
@@ -215,6 +247,43 @@ See **[examples/example_usage.py](examples/example_usage.py)** for additional co
 - Batch processing
 - Custom configuration
 - Individual component access
+
+### Batch Processing Examples
+
+See **[examples/batch_processing_example.py](examples/batch_processing_example.py)** for advanced batch processing patterns:
+- Simple batch processing with default settings
+- Parallel processing with multiprocessing
+- Progress tracking with tqdm
+- Processing from directory trees
+- Retry logic for failed files
+- Batch results serialization
+
+Install batch processing dependencies:
+```bash
+pip install -e ".[batch]"
+```
+
+### Visualization Examples
+
+See **[examples/visualization_plotly.py](examples/visualization_plotly.py)** for interactive Plotly visualizations:
+- Audio waveforms and spectrograms
+- Tempo and beat detection results
+- Feature distributions and timelines
+- Stem comparison charts
+- MIDI piano roll visualization
+- Batch processing statistics
+- Feature heatmaps
+
+Install visualization dependencies:
+```bash
+pip install -e ".[viz]"
+```
+
+Run visualizations:
+```bash
+python examples/visualization_plotly.py
+# Open generated HTML files in output/visualizations/
+```
 
 ## Output Directory Structure
 

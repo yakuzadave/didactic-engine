@@ -42,6 +42,14 @@ ml = [
     "onnxruntime>=1.14.0",
     "torchcodec>=0.1.0",
 ]
+viz = [
+    "plotly>=5.0.0",
+    "kaleido>=0.2.0",
+]
+batch = [
+    "tqdm>=4.65.0",
+    "polars>=0.20.0",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
@@ -55,6 +63,10 @@ all = [
     "onnxruntime>=1.14.0",
     "torchcodec>=0.1.0",
     "essentia>=2.1b5",
+    "plotly>=5.0.0",
+    "kaleido>=0.2.0",
+    "tqdm>=4.65.0",
+    "polars>=0.20.0",
 ]
 
 [project.scripts]
