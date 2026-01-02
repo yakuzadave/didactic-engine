@@ -2,7 +2,7 @@
 Example script demonstrating the didactic-engine audio processing pipeline.
 """
 
-import os
+
 from pathlib import Path
 from didactic_engine.pipeline import AudioPipeline
 from didactic_engine.config import PipelineConfig

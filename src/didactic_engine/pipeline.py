@@ -413,9 +413,18 @@ class AudioPipeline:
                 
                 successful.append((song_id, str(input_file), result))
                 print(f"  ✓ Completed successfully")
-                
+            
+            except FileNotFoundError as e:
+                # Handle expected missing-file errors explicitly so tests and callers
+                # can distinguish them from other processing failures.
+                error_msg = f"File not found: {e}"
+                failed.append((song_id, str(input_file), error_msg))
+                print(f"  ✗ Failed (missing file): {error_msg}")
+            
             except Exception as e:
-                error_msg = str(e)
+                # Preserve batch robustness while keeping the exception type visible
+                # in the recorded error message for easier debugging and validation.
+                error_msg = f"{type(e).__name__}: {e}"
                 failed.append((song_id, str(input_file), error_msg))
                 print(f"  ✗ Failed: {error_msg}")
         

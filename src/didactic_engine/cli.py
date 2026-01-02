@@ -163,7 +163,7 @@ Examples:
             )
             
             try:
-                result = run_all(cfg)
+                run_all(cfg)
                 results.append((song_id, wav_file, "SUCCESS"))
                 print(f"  ✓ Completed successfully")
             except Exception as e:
