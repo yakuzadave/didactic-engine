@@ -34,7 +34,7 @@ dependencies = [
 
 [project.optional-dependencies]
 essentia = [
-    "essentia>=2.1b6",
+    "essentia>=2.1b5",
 ]
 ml = [
     "demucs>=4.0.0",
@@ -49,7 +49,7 @@ dev = [
 all = [
     "demucs>=4.0.0",
     "basic-pitch>=0.2.0",
-    "essentia>=2.1b6",
+    "essentia>=2.1b5",
 ]
 
 [project.scripts]
