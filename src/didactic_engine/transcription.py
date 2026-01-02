@@ -152,9 +152,9 @@ class BasicPitchTranscriber:
             output/midi/bass.mid
 
         Note:
-            Basic Pitch is called with ``--save-midi --no-sonify`` flags.
-            The ``--no-sonify`` flag prevents generation of audio files
-            (we only want MIDI output).
+            Basic Pitch is called with the ``--save-midi`` flag.
+            Sonification (audio file generation) is disabled by default,
+            so only MIDI output is generated.
 
             If Basic Pitch creates a MIDI file with a different name than
             expected, the newest .mid file in the output directory is
@@ -174,7 +174,6 @@ class BasicPitchTranscriber:
             str(out_dir),
             str(stem_wav),
             "--save-midi",
-            "--no-sonify",
         ]
 
         try:

@@ -46,8 +46,6 @@ def transcribe_to_midi(wav_path: Path, midi_output_dir: Path, timeout: int | Non
         str(midi_output_dir),
         str(wav_path),
         "--save-midi",
-        "--no-onset",
-        "--no-contour",
     ]
 
     try:
