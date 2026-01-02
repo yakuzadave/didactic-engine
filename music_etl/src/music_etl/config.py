@@ -38,6 +38,9 @@ class PipelineConfig:
     demucs_model: str = "htdemucs"
     demucs_two_stems: str | None = None  # If set (e.g., "vocals"), only separate vocals/accompaniment
     demucs_timeout: int | None = None  # Timeout in seconds, auto-calculated if None
+    
+    # Basic Pitch transcription options
+    transcribe_timeout: int | None = None  # Timeout in seconds, auto-calculated if None
 
     @property
     def stems_dir(self) -> Path:

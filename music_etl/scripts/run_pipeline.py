@@ -72,6 +72,12 @@ Examples:
         help="Demucs timeout in seconds (default: auto-calculated based on file size)",
     )
     parser.add_argument(
+        "--transcribe-timeout",
+        type=int,
+        default=None,
+        help="Basic Pitch transcription timeout in seconds (default: auto-calculated based on file size)",
+    )
+    parser.add_argument(
         "--sr",
         type=int,
         default=22050,
@@ -130,6 +136,7 @@ Examples:
         demucs_model=args.demucs_model,
         demucs_two_stems=args.two_stems,
         demucs_timeout=args.demucs_timeout,
+        transcribe_timeout=args.transcribe_timeout,
         use_pydub_preprocess=not args.no_preprocess,
         use_essentia_features=not args.no_essentia,
         write_bar_chunks=not args.no_chunks,

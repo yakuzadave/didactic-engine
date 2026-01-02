@@ -191,7 +191,9 @@ def run_all(cfg: PipelineConfig) -> None:
     midi_files = {}
     for stem_name, stem_path in stems_map.items():
         try:
-            midi_path = transcribe_to_midi(stem_path, cfg.midi_dir)
+            midi_path = transcribe_to_midi(
+                stem_path, cfg.midi_dir, timeout=cfg.transcribe_timeout
+            )
             midi_files[stem_name] = midi_path
             print(f"  Transcribed: {stem_name}")
         except Exception as e:
