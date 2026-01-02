@@ -396,12 +396,12 @@ def _(AudioPipeline, config):
         print("  7. Create bar chunks")
         print("  8. Generate datasets")
         print("  9. Export reports\n")
-    
-        results = pipeline.run()
-    
+
+        # Execute the pipeline for its side effects (writing outputs to disk).
+        pipeline.run()
+
         print("✓ Pipeline completed successfully!")
         print(f"\nResults saved to: {config.out_dir}")
-    
     except Exception as e:
         print(f"⚠ Pipeline execution encountered an issue: {e}")
         print("\nThis is expected if Demucs or Basic Pitch are not installed.")
