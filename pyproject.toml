@@ -23,26 +23,33 @@ classifiers = [
 
 dependencies = [
     "numpy>=1.24.0,<2.0.0",
-    "scipy>=1.10.0",
+    "pandas>=2.0.0",
+    "pyarrow>=12.0.0",
     "librosa>=0.10.0",
     "soundfile>=0.12.0",
-    "pydub>=0.25.0",
     "pretty-midi>=0.2.10",
+    "music21>=9.1.0",
+    "pydub>=0.25.0",
 ]
 
 [project.optional-dependencies]
+essentia = [
+    "essentia>=2.1b6",
+]
 ml = [
     "demucs>=4.0.0",
     "basic-pitch>=0.2.0",
 ]
-essentia = [
-    "essentia>=2.1b6",
-]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
-    "black>=23.0.0",
     "ruff>=0.1.0",
+    "mypy>=1.0.0",
+]
+all = [
+    "demucs>=4.0.0",
+    "basic-pitch>=0.2.0",
+    "essentia>=2.1b6",
 ]
 
 [project.scripts]
@@ -51,13 +58,14 @@ didactic-engine = "didactic_engine.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.black]
-line-length = 100
-target-version = ['py311']
-
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -4,50 +4,80 @@ Command-line interface for the didactic-engine audio processing pipeline.
 
 import argparse
 import sys
-import os
 from pathlib import Path
 
-from didactic_engine.pipeline import AudioPipeline
+from didactic_engine.config import PipelineConfig
+from didactic_engine.pipeline import run_all
 
 
 def main():
     """Main entry point for the CLI."""
     parser = argparse.ArgumentParser(
-        description="Audio processing pipeline for stem separation, analysis, and feature extraction",
+        prog="didactic-engine",
+        description="Audio processing pipeline for stem separation, analysis, MIDI transcription, and feature extraction",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   # Process a single WAV file
-  didactic-engine input.wav -o output/
+  didactic-engine --wav input.wav --song-id my_song --out output/
 
   # Process with custom sample rate
-  didactic-engine input.wav -o output/ --sample-rate 48000
+  didactic-engine --wav input.wav --song-id my_song --out output/ --sr 48000
 
   # Enable Essentia for advanced analysis
-  didactic-engine input.wav -o output/ --use-essentia
+  didactic-engine --wav input.wav --song-id my_song --out output/ --use-essentia
 
-  # Process multiple files
-  didactic-engine file1.wav file2.wav file3.wav -o output/
+  # Disable bar chunking
+  didactic-engine --wav input.wav --song-id my_song --out output/ --no-bar-chunks
         """,
     )
 
     parser.add_argument(
-        "input_files",
-        nargs="+",
-        help="Input WAV file(s) to process",
-    )
-    parser.add_argument(
-        "-o",
-        "--output-dir",
+        "--wav",
         required=True,
-        help="Output directory for results",
+        type=Path,
+        help="Input WAV file to process",
     )
     parser.add_argument(
-        "-sr",
-        "--sample-rate",
+        "--song-id",
+        required=True,
+        help="Unique identifier for the song",
+    )
+    parser.add_argument(
+        "--out",
+        "-o",
+        type=Path,
+        default=Path("data"),
+        help="Output directory for results (default: data)",
+    )
+    parser.add_argument(
+        "--demucs-model",
+        default="htdemucs",
+        help="Demucs model name (default: htdemucs)",
+    )
+    parser.add_argument(
+        "--sr",
         type=int,
-        default=44100,
-        help="Target sample rate for processing (default: 44100)",
+        default=22050,
+        help="Sample rate for analysis (default: 22050)",
+    )
+    parser.add_argument(
+        "--hop",
+        type=int,
+        default=512,
+        help="Hop length for STFT (default: 512)",
+    )
+    parser.add_argument(
+        "--ts-num",
+        type=int,
+        default=4,
+        help="Time signature numerator (default: 4)",
+    )
+    parser.add_argument(
+        "--ts-den",
+        type=int,
+        default=4,
+        help="Time signature denominator (default: 4)",
     )
     parser.add_argument(
         "--use-essentia",
@@ -57,13 +87,12 @@ Examples:
     parser.add_argument(
         "--no-preprocess",
         action="store_true",
-        help="Skip stem preprocessing",
+        help="Skip audio preprocessing",
     )
     parser.add_argument(
-        "--beats-per-bar",
-        type=int,
-        default=4,
-        help="Number of beats per bar (default: 4)",
+        "--no-bar-chunks",
+        action="store_true",
+        help="Skip per-bar audio chunking",
     )
     parser.add_argument(
         "--version",
@@ -73,39 +102,41 @@ Examples:
 
     args = parser.parse_args()
 
-    # Validate input files
-    for input_file in args.input_files:
-        if not os.path.exists(input_file):
-            print(f"Error: Input file not found: {input_file}", file=sys.stderr)
-            return 1
+    # Validate input file
+    if not args.wav.exists():
+        print(f"Error: Input file not found: {args.wav}", file=sys.stderr)
+        return 1
 
-    # Create pipeline
-    print("Initializing audio processing pipeline...")
-    pipeline = AudioPipeline(
-        sample_rate=args.sample_rate,
-        use_essentia=args.use_essentia,
-        preprocess_stems=not args.no_preprocess,
-        beats_per_bar=args.beats_per_bar,
+    # Build PipelineConfig
+    cfg = PipelineConfig(
+        song_id=args.song_id,
+        input_wav=args.wav,
+        out_dir=args.out,
+        demucs_model=args.demucs_model,
+        analysis_sr=args.sr,
+        hop_length=args.hop,
+        time_signature_num=args.ts_num,
+        time_signature_den=args.ts_den,
+        use_pydub_preprocess=not args.no_preprocess,
+        use_essentia_features=args.use_essentia,
+        write_bar_chunks=not args.no_bar_chunks,
     )
 
-    # Process files
+    # Run pipeline
+    print("=" * 60)
+    print("Didactic Engine - Audio Processing Pipeline")
+    print("=" * 60)
+    print(f"Input:    {args.wav}")
+    print(f"Song ID:  {args.song_id}")
+    print(f"Output:   {args.out}")
+    print("=" * 60)
+
     try:
-        if len(args.input_files) == 1:
-            # Single file processing
-            results = pipeline.process(args.input_files[0], args.output_dir)
-            print("\n" + "="*60)
-            print("Processing completed successfully!")
-            print(f"Results saved to: {args.output_dir}")
-            print("="*60)
-        else:
-            # Batch processing
-            results = pipeline.process_batch(args.input_files, args.output_dir)
-            print("\n" + "="*60)
-            print(f"Batch processing completed!")
-            print(f"Processed {len(results)} files")
-            print(f"Results saved to: {args.output_dir}")
-            print("="*60)
-        
+        run_all(cfg)
+        print("\n" + "=" * 60)
+        print("Processing completed successfully!")
+        print(f"Results saved to: {args.out}")
+        print("=" * 60)
         return 0
 
     except Exception as e:

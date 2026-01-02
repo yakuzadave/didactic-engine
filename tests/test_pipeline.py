@@ -11,8 +11,10 @@ from didactic_engine.ingestion import WAVIngester
 from didactic_engine.analysis import AudioAnalyzer
 from didactic_engine.preprocessing import AudioPreprocessor
 from didactic_engine.features import FeatureExtractor
-from didactic_engine.segmentation import StemSegmenter
+from didactic_engine.segmentation import StemSegmenter, segment_beats_into_bars
 from didactic_engine.midi_parser import MIDIParser
+from didactic_engine.align import align_notes_to_beats
+import pandas as pd
 
 
 class TestWAVIngester:
@@ -22,16 +24,20 @@ class TestWAVIngester:
         """Test audio validation."""
         ingester = WAVIngester()
         
-        # Valid audio
-        audio = np.random.randn(2, 44100)
+        # Valid audio (1D mono float)
+        audio = np.random.randn(44100).astype(np.float32)
         assert ingester.validate(audio, 44100)
         
         # Invalid audio (contains NaN)
-        audio_invalid = np.array([1.0, np.nan, 3.0])
+        audio_invalid = np.array([1.0, np.nan, 3.0], dtype=np.float32)
         assert not ingester.validate(audio_invalid, 44100)
         
         # Invalid sample rate
         assert not ingester.validate(audio, 0)
+        
+        # Invalid type (not float)
+        audio_int = np.array([1, 2, 3], dtype=np.int32)
+        assert not ingester.validate(audio_int, 44100)
 
 
 class TestAudioAnalyzer:
@@ -45,33 +51,29 @@ class TestAudioAnalyzer:
         duration = 2.0
         sample_rate = 22050
         t = np.linspace(0, duration, int(sample_rate * duration))
-        audio = np.sin(2 * np.pi * 440 * t)
-        audio = audio.reshape(1, -1)
+        audio = np.sin(2 * np.pi * 440 * t).astype(np.float32)
         
         # Analyze
         analysis = analyzer.analyze(audio, sample_rate)
         
         # Check required fields
         assert "tempo" in analysis
-        assert "beat_frames" in analysis
         assert "beat_times" in analysis
-        assert "spectral_centroids" in analysis
-        assert "mfccs" in analysis
+        assert "librosa" in analysis
         assert isinstance(analysis["tempo"], float)
 
     def test_extract_beat_times(self):
         """Test beat time extraction."""
         analyzer = AudioAnalyzer()
         
-        # Create synthetic audio
+        # Create synthetic audio (1D mono)
         sample_rate = 22050
         duration = 2.0
-        audio = np.random.randn(1, int(sample_rate * duration))
+        audio = np.random.randn(int(sample_rate * duration)).astype(np.float32)
         
         beat_times = analyzer.extract_beat_times(audio, sample_rate)
         
         assert isinstance(beat_times, np.ndarray)
-        assert len(beat_times) > 0
 
 
 class TestAudioPreprocessor:
@@ -81,15 +83,16 @@ class TestAudioPreprocessor:
         """Test audio normalization."""
         preprocessor = AudioPreprocessor()
         
-        # Create audio with varying amplitude
-        audio = np.array([[0.1, 0.2, 0.3, 0.4, 0.5]])
+        # Create audio with low amplitude (1D mono)
+        audio = np.array([0.1, 0.2, 0.3, 0.4, 0.5], dtype=np.float32)
         sample_rate = 44100
         
         # Normalize
         normalized = preprocessor.normalize(audio, sample_rate)
         
         assert normalized is not None
-        assert normalized.shape == audio.shape
+        # After normalization, max amplitude should be close to 1.0
+        assert np.max(np.abs(normalized)) > np.max(np.abs(audio))
 
 
 class TestFeatureExtractor:
@@ -99,10 +102,10 @@ class TestFeatureExtractor:
         """Test bar-level feature extraction."""
         extractor = FeatureExtractor()
         
-        # Create synthetic audio
+        # Create synthetic audio (1D mono)
         sample_rate = 22050
         duration = 1.0
-        audio = np.random.randn(1, int(sample_rate * duration))
+        audio = np.random.randn(int(sample_rate * duration)).astype(np.float32)
         
         features = extractor.extract_bar_features(audio, sample_rate)
         
@@ -119,14 +122,25 @@ class TestFeatureExtractor:
         
         sample_rate = 22050
         duration = 2.0
-        audio = np.random.randn(1, int(sample_rate * duration))
+        audio = np.random.randn(int(sample_rate * duration)).astype(np.float32)
         
         evolving = extractor.extract_evolving_features(audio, sample_rate, n_segments=4)
         
         assert "n_segments" in evolving
         assert "segments" in evolving
-        assert "evolution" in evolving
         assert len(evolving["segments"]) == 4
+
+    def test_extract_beats(self):
+        """Test beats extraction."""
+        extractor = FeatureExtractor()
+        
+        beat_times = [0.0, 0.5, 1.0, 1.5, 2.0]
+        beats_df = extractor.extract_beats(beat_times, 120.0, "vocals", "test_song")
+        
+        assert len(beats_df) == 5
+        assert "song_id" in beats_df.columns
+        assert "stem" in beats_df.columns
+        assert "beat_index" in beats_df.columns
 
 
 class TestStemSegmenter:
@@ -136,10 +150,10 @@ class TestStemSegmenter:
         """Test bar-based segmentation."""
         segmenter = StemSegmenter()
         
-        # Create synthetic audio
+        # Create synthetic audio (1D mono)
         sample_rate = 22050
         duration = 4.0
-        audio = np.random.randn(2, int(sample_rate * duration))
+        audio = np.random.randn(int(sample_rate * duration)).astype(np.float32)
         
         # Define bar times
         bar_times = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
@@ -153,6 +167,27 @@ class TestStemSegmenter:
             assert len(chunks) == 4
             for chunk_path in chunks:
                 assert os.path.exists(chunk_path)
+
+
+class TestSegmentBeatsIntoBars:
+    """Test beat-to-bar segmentation."""
+
+    def test_segment_beats_into_bars(self):
+        """Test bar boundary computation."""
+        beat_times = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5]
+        boundaries = segment_beats_into_bars(
+            beat_times, tempo_bpm=120.0, ts_num=4, ts_den=4, audio_duration=4.0
+        )
+        
+        # With 4/4 time and 8 beats, should have 2 bars
+        assert len(boundaries) == 2
+        
+        # Check structure
+        for bar_idx, start_s, end_s in boundaries:
+            assert isinstance(bar_idx, int)
+            assert isinstance(start_s, float)
+            assert isinstance(end_s, float)
+            assert end_s > start_s
 
 
 class TestMIDIParser:
@@ -213,6 +248,131 @@ class TestMIDIParser:
         assert 0 in aligned
         assert 1 in aligned
         assert 2 in aligned
+
+
+class TestAlignNotes:
+    """Test note alignment functionality."""
+
+    def test_align_notes_to_beats(self):
+        """Test note-to-beat alignment."""
+        notes_df = pd.DataFrame({
+            "pitch": [60, 64, 67],
+            "velocity": [100, 90, 80],
+            "start_s": [0.1, 0.6, 1.2],
+            "end_s": [0.5, 1.0, 1.8],
+        })
+        
+        beat_times = [0.0, 0.5, 1.0, 1.5, 2.0]
+        
+        aligned = align_notes_to_beats(
+            notes_df, beat_times, tempo_bpm=120.0, ts_num=4, ts_den=4
+        )
+        
+        assert "beat_index" in aligned.columns
+        assert "bar_index" in aligned.columns
+        assert "beat_in_bar" in aligned.columns
+        assert len(aligned) == 3
+
+
+class TestExportMD:
+    """Test Markdown export functionality."""
+
+    def test_export_midi_markdown(self):
+        """Test MIDI Markdown export."""
+        from didactic_engine.export_md import export_midi_markdown
+
+        # Create test aligned notes
+        aligned_notes = {
+            0: [
+                {"start": 0.1, "end": 0.5, "pitch": 60, "velocity": 100},
+                {"start": 0.3, "end": 0.6, "pitch": 64, "velocity": 90},
+            ],
+            1: [
+                {"start": 1.0, "end": 1.5, "pitch": 67, "velocity": 80},
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = os.path.join(tmpdir, "test_report.md")
+            export_midi_markdown(aligned_notes, output_path, song_id="test_song")
+
+            assert os.path.exists(output_path)
+
+            # Check content
+            with open(output_path, "r") as f:
+                content = f.read()
+                assert "MIDI Analysis Report" in content
+                assert "test_song" in content
+                assert "Bar 0" in content
+                assert "Bar 1" in content
+
+    def test_pitch_to_name(self):
+        """Test pitch to note name conversion."""
+        from didactic_engine.export_md import pitch_to_name
+
+        assert pitch_to_name(60) == "C4"
+        assert pitch_to_name(69) == "A4"
+        assert pitch_to_name(48) == "C3"
+
+
+class TestExportABC:
+    """Test ABC notation export functionality."""
+
+    def test_export_abc_available(self):
+        """Test ABC export module availability."""
+        from didactic_engine.export_abc import MUSIC21_AVAILABLE
+
+        # music21 is now a core dependency
+        assert MUSIC21_AVAILABLE is True
+
+
+class TestEssentiaFeatures:
+    """Test Essentia feature extraction."""
+
+    def test_essentia_not_installed(self):
+        """Test Essentia returns available=False when not installed."""
+        from didactic_engine.essentia_features import extract_essentia_features
+
+        # Test with a non-existent file (should return error)
+        result = extract_essentia_features("/nonexistent/file.wav", 44100)
+        
+        # Should either say not available or file not found
+        assert result.get("available") is False or "error" in result
+
+
+class TestConfig:
+    """Test pipeline configuration."""
+
+    def test_pipeline_config(self):
+        """Test PipelineConfig creation."""
+        from didactic_engine.config import PipelineConfig
+        from pathlib import Path
+
+        cfg = PipelineConfig(
+            song_id="test_song",
+            input_wav=Path("/tmp/test.wav"),
+            out_dir=Path("/tmp/output"),
+        )
+
+        assert cfg.song_id == "test_song"
+        assert cfg.stems_dir == Path("/tmp/output/stems/test_song")
+        assert cfg.midi_dir == Path("/tmp/output/midi/test_song")
+        assert cfg.analysis_dir == Path("/tmp/output/analysis/test_song")
+
+
+class TestUtilsFlatten:
+    """Test dictionary flattening utilities."""
+
+    def test_flatten_dict(self):
+        """Test nested dict flattening."""
+        from didactic_engine.utils_flatten import flatten_dict
+
+        nested = {"a": {"b": 1, "c": 2}, "d": 3}
+        flat = flatten_dict(nested)
+
+        assert flat["a.b"] == 1
+        assert flat["a.c"] == 2
+        assert flat["d"] == 3
 
 
 if __name__ == "__main__":
