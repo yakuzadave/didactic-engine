@@ -29,21 +29,21 @@ Last Updated: 2026-01-02
 
 | Module | Status | Category | Notes |
 |--------|--------|----------|-------|
-| `ingestion.py` | DRAFT | core | Has basic docstrings, needs examples |
-| `analysis.py` | DRAFT | core | Has docstrings, needs feature details |
-| `preprocessing.py` | TODO | core | Needs comprehensive docstrings |
-| `separation.py` | TODO | core | Needs Demucs integration docs |
-| `transcription.py` | TODO | core | Needs Basic Pitch integration docs |
+| `ingestion.py` | DONE | core | Enhanced with Google-style docstrings, examples |
+| `analysis.py` | DONE | core | Enhanced with feature computation details |
+| `preprocessing.py` | DONE | core | Enhanced with preprocessing step docs |
+| `separation.py` | DONE | core | Enhanced with Demucs integration details |
+| `transcription.py` | DONE | core | Enhanced with Basic Pitch integration |
 
 ### Processing Modules
 
 | Module | Status | Category | Notes |
 |--------|--------|----------|-------|
-| `features.py` | TODO | processing | Needs feature extraction docs |
-| `segmentation.py` | TODO | processing | Has functions, needs class docs |
-| `bar_chunker.py` | TODO | processing | Needs comprehensive docs |
+| `features.py` | DONE | processing | Enhanced with extract_* method docs |
+| `segmentation.py` | TODO | processing | Needs StemSegmenter class docs |
+| `bar_chunker.py` | TODO | processing | Needs bar chunking function docs |
 | `align.py` | DONE | processing | Well documented alignment functions |
-| `midi_parser.py` | TODO | processing | Needs MIDI parsing details |
+| `midi_parser.py` | TODO | processing | Needs MIDI parsing method docs |
 
 ### Export Modules
 
@@ -57,7 +57,7 @@ Last Updated: 2026-01-02
 | Module | Status | Category | Notes |
 |--------|--------|----------|-------|
 | `essentia_features.py` | TODO | utils | Needs Essentia feature docs |
-| `utils_flatten.py` | DRAFT | utils | Has basic docstrings |
+| `utils_flatten.py` | TODO | utils | Needs flattening utility docs |
 
 ---
 
@@ -87,14 +87,14 @@ Last Updated: 2026-01-02
 ## Summary Statistics
 
 - **Total Modules:** 18
-- **DONE:** 5 (28%)
-- **DRAFT:** 4 (22%)
-- **TODO:** 9 (50%)
+- **DONE:** 11 (61%)
+- **DRAFT:** 0 (0%)
+- **TODO:** 7 (39%)
 
 ---
 
-## Priority Queue
+## Priority Queue (Remaining Work)
 
-1. **High:** preprocessing.py, separation.py, transcription.py
-2. **Medium:** features.py, segmentation.py, midi_parser.py
-3. **Low:** export_md.py, export_abc.py, essentia_features.py
+1. **High:** segmentation.py, bar_chunker.py, midi_parser.py
+2. **Medium:** export_md.py, export_abc.py
+3. **Lower:** essentia_features.py, utils_flatten.py

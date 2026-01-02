@@ -1,7 +1,37 @@
 """
 Feature extraction module.
 
-Extracts events, beats, bars, and bar-level features from audio and MIDI data.
+This module provides the ``FeatureExtractor`` class for extracting structured
+features from audio and MIDI data at various levels of granularity: events,
+beats, bars, and bar-level feature vectors.
+
+Key Features:
+    - Event extraction from aligned MIDI notes
+    - Beat-level metadata generation
+    - Bar-level aggregation (note counts, velocity, pitch range)
+    - Per-bar audio feature extraction (spectral, MFCC, chroma)
+    - Evolving feature extraction across segments
+
+Integration:
+    Feature extraction occurs after MIDI parsing and alignment. Results
+    are typically exported to Parquet datasets for further analysis.
+
+Output Levels:
+    1. **Events**: One row per MIDI note with timing and alignment info
+    2. **Beats**: One row per beat with position and tempo info
+    3. **Bars**: Aggregated statistics per bar (note count, velocity, etc.)
+    4. **Bar Features**: Audio features extracted from each bar chunk
+
+Example:
+    >>> extractor = FeatureExtractor()
+    >>> events_df = extractor.extract_events(aligned_notes)
+    >>> beats_df = extractor.extract_beats(beat_times, tempo, stem, song_id)
+    >>> bars_df = extractor.extract_bars(aligned_notes, song_id)
+
+See Also:
+    - :mod:`didactic_engine.align` for note alignment
+    - :mod:`didactic_engine.bar_chunker` for bar audio slicing
+    - :mod:`didactic_engine.pipeline` for dataset generation
 """
 
 from pathlib import Path
@@ -13,21 +43,61 @@ import soundfile as sf
 
 
 class FeatureExtractor:
-    """Extract features at various levels (events, beats, bars)."""
+    """Extract structured features at event, beat, bar, and segment levels.
+    
+    Provides methods to convert raw MIDI and audio data into structured
+    DataFrames suitable for machine learning or analysis.
+    
+    Feature Levels:
+        - **Events**: Raw MIDI notes with alignment info
+        - **Beats**: Beat grid metadata
+        - **Bars**: Aggregated bar statistics
+        - **Bar Features**: Audio features per bar chunk
+    
+    Example:
+        >>> extractor = FeatureExtractor()
+        >>> 
+        >>> # Extract event-level data
+        >>> events = extractor.extract_events(aligned_notes_df)
+        >>> 
+        >>> # Extract bar-level aggregates
+        >>> bars = extractor.extract_bars(aligned_notes_df, "song_001")
+        >>> 
+        >>> # Extract audio features from a chunk
+        >>> features = extractor.extract_bar_features_from_audio(audio, sr)
+    """
 
     def __init__(self):
-        """Initialize the feature extractor."""
+        """Initialize the feature extractor.
+        
+        The extractor is stateless—all data is passed to methods directly.
+        """
         pass
 
     def extract_events(self, aligned_notes: pd.DataFrame) -> pd.DataFrame:
-        """
-        Extract events DataFrame from aligned notes.
+        """Extract events DataFrame from aligned MIDI notes.
+
+        Returns the aligned notes with any additional computed fields.
+        This is primarily a pass-through that ensures required columns exist.
 
         Args:
-            aligned_notes: DataFrame with aligned note events.
+            aligned_notes: DataFrame with aligned note events from
+                :func:`didactic_engine.align.align_notes_to_beats`. Expected
+                columns: start_s, end_s, pitch, velocity, bar_index, beat_index.
 
         Returns:
-            Events DataFrame (possibly with additional computed fields).
+            DataFrame with same structure as input, plus computed columns:
+            - ``dur_s``: Note duration (end_s - start_s) if not present
+            
+            Empty DataFrame is returned unchanged.
+
+        Example:
+            >>> extractor = FeatureExtractor()
+            >>> events = extractor.extract_events(aligned_df)
+            >>> events.to_parquet("events.parquet")
+
+        See Also:
+            - :func:`didactic_engine.align.align_notes_to_beats` for alignment
         """
         if aligned_notes.empty:
             return aligned_notes
@@ -48,17 +118,34 @@ class FeatureExtractor:
         stem: str,
         song_id: str,
     ) -> pd.DataFrame:
-        """
-        Extract beats DataFrame.
+        """Generate a beats DataFrame with one row per beat.
+
+        Creates a structured record of the beat grid for a given stem,
+        useful for analysis and joins with event data.
 
         Args:
-            beat_times: List of beat times in seconds.
-            tempo_bpm: Tempo in beats per minute.
-            stem: Stem name.
-            song_id: Song identifier.
+            beat_times: List of beat times in seconds, typically from
+                audio analysis via :class:`didactic_engine.analysis.AudioAnalyzer`.
+            tempo_bpm: Tempo in beats per minute. Used as metadata for
+                each beat row (same value throughout).
+            stem: Stem name (e.g., 'vocals', 'bass'). Identifies which
+                audio source the beats correspond to.
+            song_id: Song identifier for grouping/filtering in datasets.
 
         Returns:
-            DataFrame with columns: song_id, stem, beat_index, time_s, tempo_bpm.
+            DataFrame with columns:
+            - ``song_id``: Song identifier
+            - ``stem``: Stem name
+            - ``beat_index``: 0-based beat number
+            - ``time_s``: Beat time in seconds
+            - ``tempo_bpm``: Tempo at this beat
+
+        Example:
+            >>> extractor = FeatureExtractor()
+            >>> beat_times = [0.5, 1.0, 1.5, 2.0]
+            >>> beats_df = extractor.extract_beats(beat_times, 120.0, "vocals", "song1")
+            >>> print(beats_df.columns.tolist())
+            ['song_id', 'stem', 'beat_index', 'time_s', 'tempo_bpm']
         """
         data = []
         for idx, time_s in enumerate(beat_times):
@@ -77,16 +164,38 @@ class FeatureExtractor:
         aligned_notes: pd.DataFrame,
         song_id: str,
     ) -> pd.DataFrame:
-        """
-        Extract per-bar aggregates from aligned notes.
+        """Compute per-bar aggregate statistics from aligned notes.
+
+        Groups notes by stem and bar_index, computing summary statistics
+        useful for bar-level analysis.
 
         Args:
-            aligned_notes: DataFrame with aligned note events.
-            song_id: Song identifier.
+            aligned_notes: DataFrame with aligned note events. Required
+                columns: bar_index, pitch, velocity, start_s, end_s.
+                Optional: stem (defaults to 'all' if missing).
+            song_id: Song identifier for the output DataFrame.
 
         Returns:
-            DataFrame with columns: song_id, stem, bar_index, num_notes,
-            mean_velocity, pitch_min, pitch_max, start_s, end_s.
+            DataFrame with one row per (stem, bar_index) combination:
+            - ``song_id``: Song identifier
+            - ``stem``: Stem name
+            - ``bar_index``: Bar number (0-based)
+            - ``num_notes``: Count of notes in this bar
+            - ``mean_velocity``: Average velocity of notes
+            - ``pitch_min``: Lowest pitch (MIDI number)
+            - ``pitch_max``: Highest pitch (MIDI number)
+            - ``start_s``: Earliest note start time in bar
+            - ``end_s``: Latest note end time in bar
+            
+            Returns empty DataFrame if aligned_notes is empty.
+
+        Example:
+            >>> extractor = FeatureExtractor()
+            >>> bars = extractor.extract_bars(aligned_notes, "song_001")
+            >>> print(bars[['bar_index', 'num_notes', 'mean_velocity']].head())
+               bar_index  num_notes  mean_velocity
+            0          0          8           78.5
+            1          1         12           82.3
         """
         if aligned_notes.empty:
             return pd.DataFrame()

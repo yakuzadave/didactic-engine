@@ -1,7 +1,38 @@
 """
 Stem separation module using Demucs.
 
-Separates audio into individual stems (vocals, drums, bass, other).
+This module provides the ``StemSeparator`` class for separating audio into
+individual stems (vocals, drums, bass, other) using Facebook's Demucs model.
+It wraps the Demucs CLI for reliable, production-ready separation.
+
+Key Features:
+    - Support for multiple Demucs models (htdemucs, htdemucs_ft, etc.)
+    - Automatic stem discovery via filesystem glob
+    - Graceful error handling with actionable error messages
+    - Support for both file-based and array-based separation
+
+Prerequisites:
+    Demucs must be installed separately::
+    
+        pip install demucs
+        
+    Or for the latest version::
+    
+        pip install -U git+https://github.com/facebookresearch/demucs
+
+Integration:
+    Stem separation typically occurs early in the pipeline, after optional
+    preprocessing. Each stem is then analyzed and transcribed independently.
+
+Example:
+    >>> separator = StemSeparator(model="htdemucs")
+    >>> stems = separator.separate(Path("song.wav"), Path("output/stems"))
+    >>> print(stems.keys())
+    dict_keys(['vocals', 'drums', 'bass', 'other'])
+
+See Also:
+    - :mod:`didactic_engine.analysis` for stem analysis
+    - :mod:`didactic_engine.transcription` for MIDI transcription
 """
 
 import shutil
@@ -13,26 +44,83 @@ import soundfile as sf
 
 
 class StemSeparator:
-    """Separate audio into stems using Demucs."""
+    """Separate audio into stems using Demucs.
+    
+    Wraps the Demucs CLI to split a mix into individual stems. By default,
+    produces four stems: vocals, drums, bass, and other.
+    
+    Model Options:
+        - ``htdemucs``: Default hybrid transformer model (best quality)
+        - ``htdemucs_ft``: Fine-tuned version (slightly better on some music)
+        - ``mdx``: Alternative architecture
+        - ``demucs``: Original Demucs model
+    
+    Device Options:
+        - ``cpu``: Use CPU (slower but always available)
+        - ``cuda``: Use NVIDIA GPU (much faster)
+    
+    Attributes:
+        model: Demucs model name.
+        device: Processing device ('cpu' or 'cuda').
+        stem_names: Expected stem names for this model.
+    
+    Example:
+        >>> separator = StemSeparator(model="htdemucs", device="cuda")
+        >>> 
+        >>> # Check if Demucs is available
+        >>> if separator._check_demucs_available():
+        ...     stems = separator.separate(input_path, output_dir)
+        ...     for name, path in stems.items():
+        ...         print(f"{name}: {path}")
+    """
 
     def __init__(self, model: str = "htdemucs", device: str = "cpu"):
-        """
-        Initialize the stem separator.
+        """Initialize the stem separator.
 
         Args:
-            model: Demucs model to use (htdemucs, htdemucs_ft, etc.)
-            device: Device to use for separation (cpu, cuda)
+            model: Demucs model to use. Options:
+                - ``htdemucs``: Hybrid transformer (default, best quality)
+                - ``htdemucs_ft``: Fine-tuned hybrid transformer
+                - ``mdx``: Music Demixing architecture
+                - ``demucs``: Original convolutional model
+            device: Processing device. Options:
+                - ``cpu``: Use CPU (works everywhere, slower)
+                - ``cuda``: Use NVIDIA GPU (requires CUDA, much faster)
+                - ``cuda:0``, ``cuda:1``: Specific GPU device
+        
+        Example:
+            >>> # Default CPU processing
+            >>> separator = StemSeparator()
+            
+            >>> # GPU processing with fine-tuned model
+            >>> separator = StemSeparator(model="htdemucs_ft", device="cuda")
+        
+        Note:
+            The stem_names attribute is set to common Demucs outputs. Some
+            models may produce different stems (e.g., 6-stem models).
         """
         self.model = model
         self.device = device
         self.stem_names = ["vocals", "drums", "bass", "other"]
 
     def _check_demucs_available(self) -> bool:
-        """
-        Check if Demucs is available.
+        """Check if Demucs is available for use.
+
+        Checks both CLI availability (via PATH) and Python module import.
+        Either method is sufficient for separation to work.
 
         Returns:
-            True if Demucs CLI is available, False otherwise.
+            True if Demucs is available via CLI or Python import.
+            False if Demucs cannot be found.
+
+        Example:
+            >>> separator = StemSeparator()
+            >>> if not separator._check_demucs_available():
+            ...     print("Please install Demucs: pip install demucs")
+
+        Note:
+            CLI availability is checked first since the :meth:`separate`
+            method uses subprocess to call the demucs command.
         """
         # Check CLI availability
         if shutil.which("demucs") is not None:
@@ -50,18 +138,51 @@ class StemSeparator:
         audio_path: Union[str, Path],
         out_dir: Union[str, Path],
     ) -> Dict[str, Path]:
-        """
-        Separate audio into stems.
+        """Separate audio file into stems using Demucs CLI.
+
+        Runs Demucs via subprocess and discovers the output stem WAV files.
+        Stems are named according to their content (vocals, drums, bass, other).
 
         Args:
-            audio_path: Path to input audio file.
-            out_dir: Directory to save separated stems.
+            audio_path: Path to input audio file. Supports WAV, MP3, FLAC,
+                and other formats supported by Demucs.
+            out_dir: Directory to save separated stems. Demucs creates
+                subdirectories like ``<model>/<filename>/`` containing stems.
 
         Returns:
-            Dictionary mapping stem names to WAV file paths.
+            Dictionary mapping stem names to their file paths. Keys are
+            lowercase stem names (e.g., 'vocals', 'drums'). Values are
+            pathlib.Path objects pointing to WAV files.
+            
+            Example return::
+            
+                {
+                    'vocals': Path('output/htdemucs/song/vocals.wav'),
+                    'drums': Path('output/htdemucs/song/drums.wav'),
+                    'bass': Path('output/htdemucs/song/bass.wav'),
+                    'other': Path('output/htdemucs/song/other.wav'),
+                }
 
         Raises:
-            RuntimeError: If Demucs is not installed or separation fails.
+            RuntimeError: If Demucs is not installed, not on PATH, or if
+                separation fails. Error message includes installation
+                instructions.
+
+        Example:
+            >>> separator = StemSeparator()
+            >>> try:
+            ...     stems = separator.separate("song.wav", "output/stems")
+            ...     print(f"Vocals: {stems['vocals']}")
+            ... except RuntimeError as e:
+            ...     print(f"Separation failed: {e}")
+
+        Note:
+            Stem discovery uses ``rglob("*.wav")`` to handle Demucs's nested
+            output structure. Unknown stem names are preserved as-is in the
+            returned dictionary.
+
+        See Also:
+            - :meth:`separate_audio_array` for numpy array input
         """
         audio_path = Path(audio_path)
         out_dir = Path(out_dir)
@@ -137,22 +258,37 @@ class StemSeparator:
         sample_rate: int,
         out_dir: Union[str, Path],
     ) -> Dict[str, np.ndarray]:
-        """
-        Separate audio array into stems.
+        """Separate a numpy audio array into stems.
 
-        This is a convenience method that saves the audio to a temporary
-        file, runs separation, and loads the results back.
+        Convenience method that saves the audio to a temporary file, runs
+        separation, and loads the results back as numpy arrays.
 
         Args:
             audio: Input audio array (1D mono or 2D stereo).
-            sample_rate: Sample rate of the audio.
-            out_dir: Directory to save separated stems.
+            sample_rate: Sample rate of the audio in Hz.
+            out_dir: Directory to save separated stems. Also used for
+                the temporary input file.
 
         Returns:
-            Dictionary mapping stem names to audio arrays.
+            Dictionary mapping stem names to numpy arrays. Each array
+            has the same sample rate as the input.
 
         Raises:
             RuntimeError: If Demucs is not installed or separation fails.
+
+        Example:
+            >>> separator = StemSeparator()
+            >>> audio, sr = ingester.load("song.wav")
+            >>> stems = separator.separate_audio_array(audio, sr, "output")
+            >>> vocals = stems['vocals']
+
+        Note:
+            A temporary file ``input_temp.wav`` is created in out_dir and
+            deleted after separation. If separation fails, the temp file
+            is still cleaned up.
+
+        See Also:
+            - :meth:`separate` for file-to-file separation
         """
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)

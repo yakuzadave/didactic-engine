@@ -1,7 +1,25 @@
 """
 WAV file ingestion module.
 
-Handles loading and validation of WAV audio files.
+This module provides the ``WAVIngester`` class for loading, validating, and
+optionally resampling WAV audio files. It serves as the entry point for audio
+data into the didactic-engine pipeline.
+
+Key Features:
+    - Load WAV files with automatic stereo-to-mono conversion
+    - Optional resampling to a target sample rate
+    - Validation of audio data (NaN/Inf detection, float type verification)
+    - Save processed audio back to disk
+
+Example:
+    >>> ingester = WAVIngester(sample_rate=22050)
+    >>> audio, sr = ingester.load("path/to/audio.wav")
+    >>> if ingester.validate(audio, sr):
+    ...     print(f"Loaded {len(audio)} samples at {sr} Hz")
+
+See Also:
+    - :mod:`didactic_engine.preprocessing` for further audio processing
+    - :mod:`didactic_engine.analysis` for feature extraction
 """
 
 import os
@@ -13,30 +31,78 @@ import librosa
 
 
 class WAVIngester:
-    """Ingest and validate WAV audio files."""
+    """Load and validate WAV audio files for pipeline processing.
+    
+    This class provides methods to ingest WAV files, converting them to
+    mono numpy arrays suitable for downstream analysis. It handles:
+    
+    - Stereo to mono conversion (averaging channels)
+    - Optional resampling to a target sample rate
+    - Data validation (type, range, NaN/Inf checking)
+    - Audio file output
+    
+    Attributes:
+        sample_rate: Target sample rate for resampling, or None to keep original.
+    
+    Example:
+        >>> # Load audio at original sample rate
+        >>> ingester = WAVIngester()
+        >>> audio, sr = ingester.load("song.wav")
+        
+        >>> # Load and resample to 22050 Hz
+        >>> ingester = WAVIngester(sample_rate=22050)
+        >>> audio, sr = ingester.load("song.wav")
+        >>> assert sr == 22050
+    """
 
     def __init__(self, sample_rate: Optional[int] = None):
-        """
-        Initialize the WAV ingester.
+        """Initialize the WAV ingester.
 
         Args:
-            sample_rate: Target sample rate for resampling. If None, uses original sample rate.
+            sample_rate: Target sample rate for resampling. If None, the 
+                original sample rate of the audio file is preserved. Common
+                values are 44100 (CD quality), 22050 (analysis), or 16000
+                (speech processing).
+        
+        Example:
+            >>> ingester = WAVIngester()  # Keep original sample rate
+            >>> ingester = WAVIngester(sample_rate=22050)  # Resample to 22050 Hz
         """
         self.sample_rate = sample_rate
 
     def load(self, file_path: Union[str, Path]) -> Tuple[np.ndarray, int]:
-        """
-        Load a WAV file and return mono audio.
+        """Load a WAV file and return mono audio as a numpy array.
+
+        Reads an audio file using soundfile, automatically converts stereo
+        to mono by averaging channels, and optionally resamples to the
+        target sample rate specified during initialization.
 
         Args:
-            file_path: Path to the WAV file.
+            file_path: Path to the WAV file. Supports both string paths and
+                pathlib.Path objects. The file must exist and be readable.
 
         Returns:
-            Tuple of (mono audio data as 1D numpy array, sample rate)
+            A tuple containing:
+                - audio (np.ndarray): 1D float32 array of audio samples,
+                  normalized to range [-1.0, 1.0]
+                - sample_rate (int): Sample rate in Hz (either original or
+                  resampled)
 
         Raises:
-            FileNotFoundError: If the file doesn't exist.
-            ValueError: If the file is not a valid audio file.
+            FileNotFoundError: If the specified file does not exist.
+            ValueError: If the file cannot be read as audio (corrupt file,
+                unsupported format, or read error).
+
+        Example:
+            >>> ingester = WAVIngester(sample_rate=22050)
+            >>> audio, sr = ingester.load("examples/test.wav")
+            >>> print(f"Shape: {audio.shape}, SR: {sr}")
+            Shape: (220500,), SR: 22050
+
+        Note:
+            The returned audio is always mono (1D). For stereo files, channels
+            are averaged. For multi-channel files (>2), all channels are
+            averaged together.
         """
         file_path = Path(file_path)
         if not file_path.exists():
@@ -66,15 +132,40 @@ class WAVIngester:
             raise ValueError(f"Failed to load audio file {file_path}: {str(e)}")
 
     def validate(self, audio: np.ndarray, sample_rate: int) -> bool:
-        """
-        Validate audio data.
+        """Validate that audio data is suitable for processing.
+
+        Performs comprehensive validation of audio data to ensure it meets
+        the requirements for downstream processing. Checks include:
+        
+        - Non-None and non-empty array
+        - Correct type (numpy ndarray)
+        - Floating-point dtype
+        - No NaN or Inf values
+        - Positive sample rate
 
         Args:
-            audio: Audio data array (should be 1D mono).
-            sample_rate: Sample rate of the audio.
+            audio: Audio data array. Should be a 1D numpy array of floats
+                with values in range [-1.0, 1.0] (though not strictly enforced).
+            sample_rate: Sample rate in Hz. Must be positive.
 
         Returns:
-            True if valid, False otherwise.
+            True if the audio data passes all validation checks, False otherwise.
+            This method never raises exceptions; it returns False for invalid data.
+
+        Example:
+            >>> ingester = WAVIngester()
+            >>> audio = np.array([0.1, 0.2, 0.3], dtype=np.float32)
+            >>> ingester.validate(audio, 44100)
+            True
+            
+            >>> bad_audio = np.array([np.nan, 0.2])
+            >>> ingester.validate(bad_audio, 44100)
+            False
+
+        Note:
+            This method does not check for audio quality issues like clipping
+            or DC offset—only structural validity. Use preprocessing for
+            audio quality improvements.
         """
         # Check if audio is None or empty
         if audio is None:
@@ -101,13 +192,34 @@ class WAVIngester:
         return True
 
     def save(self, audio: np.ndarray, sample_rate: int, output_path: Union[str, Path]) -> None:
-        """
-        Save audio data to a WAV file.
+        """Save audio data to a WAV file.
+
+        Writes a numpy array to disk as a WAV file. Creates parent directories
+        if they don't exist. Suitable for saving processed audio for later use.
 
         Args:
-            audio: Audio data array (1D mono or 2D stereo).
-            sample_rate: Sample rate of the audio.
-            output_path: Path to save the WAV file.
+            audio: Audio data array. Can be 1D (mono) or 2D (stereo, with
+                shape (samples, channels) or (channels, samples)).
+            sample_rate: Sample rate in Hz for the output file.
+            output_path: Destination path for the WAV file. Parent directories
+                will be created if they don't exist.
+
+        Raises:
+            OSError: If the file cannot be written (permissions, disk space).
+            ValueError: If audio format is invalid.
+
+        Example:
+            >>> ingester = WAVIngester()
+            >>> audio = np.sin(2 * np.pi * 440 * np.arange(44100) / 44100)
+            >>> ingester.save(audio, 44100, "output/test_tone.wav")
+
+        Note:
+            The output format is determined by soundfile defaults (16-bit PCM
+            for WAV). Audio values should be in range [-1.0, 1.0] to avoid
+            clipping.
+
+        See Also:
+            - :meth:`load` for loading WAV files
         """
         output_path = Path(output_path)
         
