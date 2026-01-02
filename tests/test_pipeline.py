@@ -6,6 +6,8 @@ import pytest
 import numpy as np
 import os
 import tempfile
+from pathlib import Path
+import soundfile as sf
 
 from didactic_engine.ingestion import WAVIngester
 from didactic_engine.analysis import AudioAnalyzer
@@ -14,6 +16,7 @@ from didactic_engine.features import FeatureExtractor
 from didactic_engine.segmentation import StemSegmenter, segment_beats_into_bars
 from didactic_engine.midi_parser import MIDIParser
 from didactic_engine.align import align_notes_to_beats
+from didactic_engine.pipeline import AudioPipeline
 import pandas as pd
 
 
@@ -458,10 +461,6 @@ class TestBatchProcessing:
 
     def test_batch_processing_with_valid_files(self):
         """Test batch processing with multiple valid WAV files."""
-        from didactic_engine.pipeline import AudioPipeline
-        from pathlib import Path
-        import soundfile as sf
-
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
             
@@ -505,10 +504,6 @@ class TestBatchProcessing:
 
     def test_batch_processing_with_custom_song_ids(self):
         """Test batch processing with custom song IDs."""
-        from didactic_engine.pipeline import AudioPipeline
-        from pathlib import Path
-        import soundfile as sf
-
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
             
@@ -545,10 +540,6 @@ class TestBatchProcessing:
 
     def test_batch_processing_with_missing_file(self):
         """Test batch processing handles missing files gracefully."""
-        from didactic_engine.pipeline import AudioPipeline
-        from pathlib import Path
-        import soundfile as sf
-
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
             
@@ -584,9 +575,6 @@ class TestBatchProcessing:
 
     def test_batch_processing_song_ids_mismatch(self):
         """Test that mismatched song_ids count raises ValueError."""
-        from didactic_engine.pipeline import AudioPipeline
-        from pathlib import Path
-
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
             

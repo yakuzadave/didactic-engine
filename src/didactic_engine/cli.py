@@ -126,6 +126,10 @@ Examples:
     
     # Batch processing
     if len(wav_files) > 1:
+        # Warn if song_id is provided in batch mode
+        if args.song_id:
+            print("Warning: --song-id is ignored in batch mode. Song IDs will be auto-generated from filenames.", file=sys.stderr)
+        
         print("=" * 60)
         print("Didactic Engine - Batch Processing Mode")
         print("=" * 60)
@@ -137,8 +141,8 @@ Examples:
         errors = []
         
         for idx, wav_file in enumerate(wav_files, 1):
-            # Auto-generate song_id from filename if not provided
-            song_id = args.song_id if args.song_id else wav_file.stem
+            # Auto-generate song_id from filename
+            song_id = wav_file.stem
             
             print(f"\n[{idx}/{len(wav_files)}] Processing: {wav_file.name}")
             print(f"  Song ID: {song_id}")

@@ -372,7 +372,9 @@ class AudioPipeline:
             ... )
             >>> print(f"Processed {results['success_count']} files successfully")
         """
-        # Import here to avoid circular imports
+        # Import here to avoid circular imports at module load time.
+        # config.py doesn't import pipeline.py, but keeping this pattern
+        # ensures flexibility if the dependency structure changes in the future.
         from didactic_engine.config import PipelineConfig
         
         if song_ids is None:
