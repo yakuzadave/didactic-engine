@@ -67,6 +67,7 @@ didactic-engine/
 │       │
 │       │ # Optional/Utilities
 │       ├── essentia_features.py # Essentia integration
+│       ├── onnx_inference.py    # ONNX Runtime inference
 │       └── utils_flatten.py    # Dictionary flattening
 │
 ├── tests/
@@ -137,6 +138,9 @@ results = pipeline.run()
 ### Export
 - `export_md.py` - Markdown reports
 - `export_abc.py` - ABC notation (music21)
+
+### ML Inference
+- `onnx_inference.py` - ONNX Runtime inference (TensorFlow-free alternative for ML models)
 
 ---
 
