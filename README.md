@@ -1,30 +1,31 @@
 # Didactic Engine
 
-A comprehensive Python 3.11+ audio processing pipeline for music analysis and manipulation.
+A comprehensive Python 3.11+ audio processing toolkit for music analysis, stem separation, MIDI transcription, and dataset generation.
 
-## Features
+## What Does It Do?
 
-- **WAV Ingestion**: Load and validate WAV audio files with automatic resampling
-- **Stem Separation**: Separate audio into individual stems (vocals, drums, bass, other) using Demucs
-- **Audio Preprocessing**: Normalize, compress, and process stems with pydub
-- **Audio Analysis**: Comprehensive analysis using librosa and optional Essentia
-  - Tempo and beat detection
-  - Spectral feature extraction
-  - Onset detection
-  - Chroma and MFCCs
-- **MIDI Transcription**: Convert audio to MIDI using Spotify's Basic Pitch
-- **MIDI Parsing**: Parse and manipulate MIDI data with pretty_midi
-- **Beat/Bar Alignment**: Align MIDI events to detected beat and bar grids
-- **Stem Segmentation**: Split stems into per-bar WAV chunks
-- **Feature Extraction**: Extract evolving bar-level features for analysis
+Didactic Engine is an end-to-end audio processing pipeline that:
+
+1. **Ingests** WAV files and validates their format
+2. **Preprocesses** audio (resampling, mono conversion, normalization, silence trimming)
+3. **Separates stems** using Demucs (vocals, drums, bass, other)
+4. **Extracts features** (tempo, beats, spectral features, MFCCs, chroma)
+5. **Transcribes to MIDI** using Spotify's Basic Pitch
+6. **Aligns notes** to a beat/bar grid based on a configurable time signature
+7. **Segments audio** into per-bar WAV chunks
+8. **Generates datasets** in Parquet format (events, beats, bars, bar features)
+9. **Exports reports** in Markdown and ABC notation
 
 ## Installation
 
-### Requirements
-- Python 3.11 or higher
-- FFmpeg (for audio processing)
+### Prerequisites
 
-### Install from source
+- Python 3.11 or higher
+- FFmpeg (for audio processing with pydub)
+- Demucs CLI (for stem separation) - optional
+- Basic Pitch CLI (for MIDI transcription) - optional
+
+### Install from Source
 
 ```bash
 git clone https://github.com/yakuzadave/didactic-engine.git
@@ -32,57 +33,70 @@ cd didactic-engine
 pip install -e .
 ```
 
-### Install dependencies
+### Install Optional Dependencies
 
+For Essentia features:
 ```bash
-pip install -r requirements.txt
+pip install -e ".[essentia]"
 ```
 
-## Quick Start
+For Demucs and Basic Pitch:
+```bash
+pip install -e ".[ml]"
+```
+
+For all extras:
+```bash
+pip install -e ".[all]"
+```
+
+## Usage
 
 ### Command Line Interface
 
-Process a single audio file:
+Process a WAV file:
 
 ```bash
-didactic-engine input.wav -o output/
-```
-
-Process multiple files:
-
-```bash
-didactic-engine file1.wav file2.wav file3.wav -o output/
+didactic-engine --wav input.wav --song-id my_song --out data/
 ```
 
 With custom options:
 
 ```bash
-didactic-engine input.wav -o output/ \
-    --sample-rate 48000 \
-    --use-essentia \
-    --beats-per-bar 4
+didactic-engine --wav input.wav --song-id my_song --out data/ \
+    --sr 44100 \
+    --ts-num 4 \
+    --ts-den 4 \
+    --use-essentia
+```
+
+View all options:
+
+```bash
+didactic-engine --help
 ```
 
 ### Python API
 
 ```python
-from didactic_engine.pipeline import AudioPipeline
+from didactic_engine import AudioPipeline, PipelineConfig
+from pathlib import Path
 
-# Initialize pipeline
-pipeline = AudioPipeline(
-    sample_rate=44100,
-    use_essentia=False,
-    preprocess_stems=True,
-    beats_per_bar=4,
+# Create configuration
+cfg = PipelineConfig(
+    song_id="my_song",
+    input_wav=Path("input.wav"),
+    out_dir=Path("data"),
+    analysis_sr=22050,
+    time_signature_num=4,
+    time_signature_den=4,
+    use_essentia_features=False,
+    write_bar_chunks=True,
 )
 
-# Process audio file
-results = pipeline.process("input.wav", "output/")
-
-# Access results
-print(f"Tempo: {results['analysis']['tempo']:.2f} BPM")
-print(f"Bars detected: {len(results['bar_times'])}")
-print(f"Stems: {results['stem_names']}")
+# Run pipeline
+pipeline = AudioPipeline(cfg)
+results = pipeline.run()
 ```
 
 ### Using Individual Components
@@ -90,146 +104,124 @@ print(f"Stems: {results['stem_names']}")
 ```python
 from didactic_engine.ingestion import WAVIngester
 from didactic_engine.analysis import AudioAnalyzer
-from didactic_engine.separation import StemSeparator
+from didactic_engine.preprocessing import AudioPreprocessor
 
-# Load audio
-ingester = WAVIngester(sample_rate=44100)
+# Load and validate audio
+ingester = WAVIngester(sample_rate=22050)
 audio, sr = ingester.load("input.wav")
 
 # Analyze
-analyzer = AudioAnalyzer()
+analyzer = AudioAnalyzer(use_essentia=False)
 analysis = analyzer.analyze(audio, sr)
+print(f"Tempo: {analysis['tempo']:.2f} BPM")
+print(f"Beats: {len(analysis['beat_times'])}")
 
-# Separate stems
-separator = StemSeparator()
-stems = separator.separate(audio, sr)
+# Preprocess
+preprocessor = AudioPreprocessor()
+normalized = preprocessor.normalize(audio, sr)
 ```
 
-## Pipeline Architecture
-
-The complete pipeline consists of the following stages:
-
-1. **Ingestion**: Load WAV files and validate audio data
-2. **Analysis**: Extract tempo, beats, bars, and spectral features
-3. **Separation**: Split audio into instrumental stems
-4. **Preprocessing**: Normalize and enhance stem audio quality
-5. **Transcription**: Convert audio to MIDI notation
-6. **MIDI Parsing**: Extract note events and timing information
-7. **Alignment**: Align MIDI events to beat/bar grid
-8. **Segmentation**: Split stems into per-bar chunks
-9. **Feature Extraction**: Extract bar-level audio features
-
-## Output Structure
+## Output Directory Structure
 
 ```
-output/
-├── pipeline_results.json       # Complete pipeline results
-├── transcription.mid          # Transcribed MIDI file
-├── stems/                     # Separated audio stems
+data/
+├── input/<song_id>/
+│   └── original_copy.wav
+├── preprocessed/<song_id>/
+│   └── <song_id>.wav
+├── stems/<song_id>/
 │   ├── vocals.wav
 │   ├── drums.wav
 │   ├── bass.wav
 │   └── other.wav
-├── segments/                  # Per-bar audio chunks
-│   ├── vocals/
-│   │   ├── vocals_bar_0000.wav
-│   │   ├── vocals_bar_0001.wav
-│   │   └── ...
-│   └── drums/
-│       ├── drums_bar_0000.wav
-│       └── ...
-└── features/                  # Extracted features
-    ├── vocals_features.json
-    ├── drums_features.json
-    └── ...
+├── chunks/<song_id>/<stem>/
+│   ├── bar_0000.wav
+│   ├── bar_0001.wav
+│   └── ...
+├── midi/<song_id>/
+│   ├── vocals.mid
+│   ├── drums.mid
+│   └── ...
+├── analysis/<song_id>/
+│   └── combined.json
+├── reports/<song_id>/
+│   ├── midi_markdown.md
+│   ├── vocals.abc
+│   └── ...
+└── datasets/<song_id>/
+    ├── events.parquet
+    ├── beats.parquet
+    ├── bars.parquet
+    └── bar_features.parquet
 ```
 
-## API Documentation
+## Features
 
-### AudioPipeline
+### Audio Analysis
+- Tempo detection
+- Beat tracking
+- Spectral features (centroid, bandwidth, rolloff)
+- MFCCs (13 coefficients)
+- Chroma features
+- Zero crossing rate
+- RMS energy
 
-Main pipeline class that orchestrates the complete workflow.
+### Optional Essentia Features
+- Stevens loudness
+- EBU R128 loudness
+- Additional MFCC analysis
+- Spectral centroid variations
 
-**Parameters:**
-- `sample_rate` (int): Target sample rate for processing (default: 44100)
-- `use_essentia` (bool): Enable Essentia for advanced analysis (default: False)
-- `preprocess_stems` (bool): Apply preprocessing to stems (default: True)
-- `beats_per_bar` (int): Number of beats per bar (default: 4)
+### Dataset Outputs
+- **events.parquet**: Individual note events with timing
+- **beats.parquet**: Beat grid information
+- **bars.parquet**: Bar-level aggregations
+- **bar_features.parquet**: Audio features per bar
 
-**Methods:**
-- `process(input_wav_path, output_dir)`: Process a single WAV file
-- `process_batch(input_wav_paths, output_base_dir)`: Process multiple files
+## Limitations and Caveats
 
-### Individual Components
-
-- `WAVIngester`: Load and validate WAV files
-- `StemSeparator`: Separate audio into stems using Demucs
-- `AudioPreprocessor`: Normalize and process audio with pydub
-- `AudioAnalyzer`: Analyze audio with librosa and Essentia
-- `MIDITranscriber`: Transcribe audio to MIDI using Basic Pitch
-- `MIDIParser`: Parse and manipulate MIDI data
-- `StemSegmenter`: Segment audio into time-based chunks
-- `FeatureExtractor`: Extract audio features
-
-## Examples
-
-See the `examples/` directory for detailed usage examples:
-
-- `example_usage.py`: Comprehensive examples of all major features
+- **Demucs** must be installed separately (`pip install demucs`)
+- **Basic Pitch** must be installed separately (`pip install basic-pitch`)
+- **Essentia** has AGPL license considerations if distributed
+- Beat detection assumes **steady tempo** and works best with rhythmic music
+- Bar detection assumes a **simple time signature** (default: 4/4)
+- Basic Pitch may mis-transcribe polyphonic audio; stem separation helps
 
 ## Development
 
 ### Running Tests
 
 ```bash
-pytest tests/
+pytest tests/ -v
 ```
 
-### Code Formatting
+### Code Style
 
 ```bash
-black src/
 ruff check src/
 ```
 
 ## Dependencies
 
-### Core Dependencies
-- `numpy`: Numerical computing
-- `scipy`: Scientific computing
-- `librosa`: Audio analysis
-- `soundfile`: Audio I/O
-- `pydub`: Audio processing
-- `demucs`: Stem separation
-- `basic-pitch`: MIDI transcription
-- `pretty-midi`: MIDI manipulation
-- `essentia`: Advanced audio analysis (optional)
+### Core
+- numpy, pandas, pyarrow
+- librosa, soundfile, pydub
+- pretty-midi, music21
+
+### Optional
+- essentia (for advanced features)
+- demucs (for stem separation)
+- basic-pitch (for MIDI transcription)
 
 ## License
 
-MIT License - see LICENSE file for details.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## Citation
-
-If you use this project in your research, please cite:
-
-```bibtex
-@software{didactic_engine,
-  title = {Didactic Engine: Audio Processing Pipeline},
-  author = {Yakuza Dave},
-  year = {2026},
-  url = {https://github.com/yakuzadave/didactic-engine}
-}
-```
+MIT License
 
 ## Acknowledgments
 
-This project builds upon several excellent open-source libraries:
+Built with:
 - [Demucs](https://github.com/facebookresearch/demucs) for stem separation
 - [Basic Pitch](https://github.com/spotify/basic-pitch) for MIDI transcription
 - [librosa](https://librosa.org/) for audio analysis
-- [Essentia](https://essentia.upf.edu/) for advanced audio features
+- [Essentia](https://essentia.upf.edu/) for advanced features
+- [music21](https://web.mit.edu/music21/) for ABC notation export
