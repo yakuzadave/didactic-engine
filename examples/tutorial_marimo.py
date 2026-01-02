@@ -105,21 +105,6 @@ def _(mo):
     return
 
 
-@app.cell
-def _(IN_COLAB, subprocess):
-    # Install didactic-engine from GitHub
-    if IN_COLAB:
-        subprocess.call(['pip', 'install', '-q', 'git+https://github.com/yakuzadave/didactic-engine.git'])
-    else:
-        print("To install locally, run:")
-        print("  git clone https://github.com/yakuzadave/didactic-engine.git")
-        print("  cd didactic-engine")
-        print("  pip install -e .")
-        print("\nOr install directly from GitHub:")
-        print("  pip install git+https://github.com/yakuzadave/didactic-engine.git")
-    return
-
-
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
@@ -287,11 +272,17 @@ def _(AudioAnalyzer, audio, sr):
     print(f"  Tempo: {analysis_result['tempo']:.2f} BPM")
     print(f"  Number of beats: {len(analysis_result['beat_times'])}")
     print(f"\nSpectral Features:")
-    print(f"  Spectral centroid (mean): {analysis_result['spectral_centroid_mean']:.2f} Hz")
-    print(f"  Spectral bandwidth (mean): {analysis_result['spectral_bandwidth_mean']:.2f} Hz")
-    print(f"  Zero crossing rate (mean): {analysis_result['zero_crossing_rate_mean']:.4f}")
+    print(f"  Spectral centroid (mean): {analysis_result['librosa']['spectral_centroid']['mean']:.2f} Hz")
+    print(f"  Spectral bandwidth (mean): {analysis_result['librosa']['spectral_bandwidth']['mean']:.2f} Hz")
+    print(f"  Zero crossing rate (mean): {analysis_result['librosa']['zcr']['mean']:.4f}")
     print(f"\nEnergy:")
-    print(f"  RMS energy (mean): {analysis_result['rms_mean']:.4f}")
+    print(f"  RMS energy (mean): {analysis_result['librosa']['rms']['mean']:.4f}")
+
+    # Show how to flatten the results for easier access
+    from didactic_engine.utils_flatten import flatten_dict
+    flat_result = flatten_dict(analysis_result)
+    print(f"\nFlattened keys available: {len(flat_result)} total keys")
+    print(f"Example flattened key: 'librosa.spectral_centroid.mean' = {flat_result['librosa.spectral_centroid.mean']:.2f}")
     return
 
 
@@ -397,11 +388,11 @@ def _(AudioPipeline, config):
         print("  8. Generate datasets")
         print("  9. Export reports\n")
 
-        # Execute the pipeline for its side effects (writing outputs to disk).
-        pipeline.run()
+        results = pipeline.run()
 
         print("✓ Pipeline completed successfully!")
         print(f"\nResults saved to: {config.out_dir}")
+
     except Exception as e:
         print(f"⚠ Pipeline execution encountered an issue: {e}")
         print("\nThis is expected if Demucs or Basic Pitch are not installed.")
@@ -429,19 +420,19 @@ def _(Path):
         """Display directory tree structure."""
         if current_depth >= max_depth:
             return
-    
+
         path = Path(path)
         if not path.exists():
             print(f"{prefix}(Directory not yet created)")
             return
-    
+
         items = sorted(path.iterdir(), key=lambda x: (not x.is_dir(), x.name))
-    
+
         for i, item in enumerate(items):
             is_last = i == len(items) - 1
             current_prefix = "└── " if is_last else "├── "
             print(f"{prefix}{current_prefix}{item.name}")
-        
+
             if item.is_dir():
                 extension = "    " if is_last else "│   "
                 show_directory_tree(item, prefix + extension, max_depth, current_depth + 1)
@@ -488,7 +479,7 @@ def _(config):
 
     if datasets_dir.exists():
         print("Loading generated datasets...\n")
-    
+
         # Load events dataset
         events_path = datasets_dir / "events.parquet"
         if events_path.exists():
@@ -496,7 +487,7 @@ def _(config):
             print(f"Events Dataset: {len(events_df)} rows")
             print(events_df.head())
             print()
-    
+
         # Load bars dataset
         bars_path = datasets_dir / "bars.parquet"
         if bars_path.exists():
@@ -504,7 +495,7 @@ def _(config):
             print(f"\nBars Dataset: {len(bars_df)} rows")
             print(bars_df.head())
             print()
-    
+
         # Load bar features dataset
         bar_features_path = datasets_dir / "bar_features.parquet"
         if bar_features_path.exists():
