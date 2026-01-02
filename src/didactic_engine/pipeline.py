@@ -17,6 +17,8 @@ from didactic_engine.transcription import MIDITranscriber
 from didactic_engine.midi_parser import MIDIParser
 from didactic_engine.segmentation import StemSegmenter
 from didactic_engine.features import FeatureExtractor
+from didactic_engine.export_md import export_midi_markdown, export_full_report
+from didactic_engine.export_abc import export_abc
 
 
 class AudioPipeline:
@@ -182,6 +184,41 @@ class AudioPipeline:
             stem: len(feats) for stem, feats in all_stem_features.items()
         }
         print(f"  Extracted features for {len(all_stem_features)} stems")
+
+        # Step 10: Export reports
+        print("Step 10: Exporting human-readable reports...")
+        reports_dir = os.path.join(output_dir, "reports")
+        os.makedirs(reports_dir, exist_ok=True)
+
+        # Export Markdown report for aligned notes
+        if "aligned_notes" in results:
+            md_path = os.path.join(reports_dir, "midi_report.md")
+            aligned_for_export = {
+                int(k): v for k, v in results["aligned_notes"].items()
+            }
+            export_midi_markdown(
+                aligned_for_export,
+                md_path,
+                song_id=os.path.basename(input_wav_path),
+            )
+            results["markdown_report"] = md_path
+            print(f"  Exported Markdown report: {md_path}")
+
+        # Export full pipeline report
+        full_report_path = os.path.join(reports_dir, "pipeline_report.md")
+        export_full_report(results, full_report_path)
+        results["full_report"] = full_report_path
+        print(f"  Exported full report: {full_report_path}")
+
+        # Export ABC notation if MIDI was created
+        if "midi_path" in results:
+            abc_path = os.path.join(reports_dir, "transcription.abc")
+            success = export_abc(results["midi_path"], abc_path)
+            if success:
+                results["abc_notation"] = abc_path
+                print(f"  Exported ABC notation: {abc_path}")
+            else:
+                print(f"  ABC export skipped (music21 not available)")
 
         # Save complete results
         results_path = os.path.join(output_dir, "pipeline_results.json")

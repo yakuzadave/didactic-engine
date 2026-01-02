@@ -215,5 +215,58 @@ class TestMIDIParser:
         assert 2 in aligned
 
 
+class TestExportMD:
+    """Test Markdown export functionality."""
+
+    def test_export_midi_markdown(self):
+        """Test MIDI Markdown export."""
+        from didactic_engine.export_md import export_midi_markdown
+
+        # Create test aligned notes
+        aligned_notes = {
+            0: [
+                {"start": 0.1, "end": 0.5, "pitch": 60, "velocity": 100},
+                {"start": 0.3, "end": 0.6, "pitch": 64, "velocity": 90},
+            ],
+            1: [
+                {"start": 1.0, "end": 1.5, "pitch": 67, "velocity": 80},
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = os.path.join(tmpdir, "test_report.md")
+            export_midi_markdown(aligned_notes, output_path, song_id="test_song")
+
+            assert os.path.exists(output_path)
+
+            # Check content
+            with open(output_path, "r") as f:
+                content = f.read()
+                assert "MIDI Analysis Report" in content
+                assert "test_song" in content
+                assert "Bar 0" in content
+                assert "Bar 1" in content
+
+    def test_pitch_to_name(self):
+        """Test pitch to note name conversion."""
+        from didactic_engine.export_md import pitch_to_name
+
+        assert pitch_to_name(60) == "C4"
+        assert pitch_to_name(69) == "A4"
+        assert pitch_to_name(48) == "C3"
+
+
+class TestExportABC:
+    """Test ABC notation export functionality."""
+
+    def test_export_abc_without_music21(self):
+        """Test ABC export gracefully handles missing music21."""
+        from didactic_engine.export_abc import MUSIC21_AVAILABLE
+
+        # This test just verifies the module can be imported
+        # Full functionality depends on music21 being installed
+        assert isinstance(MUSIC21_AVAILABLE, bool)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
