@@ -40,7 +40,7 @@ For Essentia features:
 pip install -e ".[essentia]"
 ```
 
-For Demucs and Basic Pitch:
+For ML features (Demucs, Basic Pitch, and ONNX inference):
 ```bash
 pip install -e ".[ml]"
 ```
@@ -48,6 +48,29 @@ pip install -e ".[ml]"
 For all extras:
 ```bash
 pip install -e ".[all]"
+```
+
+### Python Version Notes
+
+- **Python 3.11**: Full support including Basic Pitch MIDI transcription (uses TensorFlow backend)
+- **Python 3.12+**: Full support with ONNX Runtime as the ML inference backend. Basic Pitch is not available on Python 3.12+ due to TensorFlow compatibility requirements (Basic Pitch requires TensorFlow < 2.15.1, which is not available for Python 3.12).
+
+The `ml` extras include `onnxruntime` which provides:
+- ONNX model loading and inference
+- GPU acceleration support (CUDA, TensorRT, CoreML)
+- Cross-platform compatibility
+
+```python
+from didactic_engine.onnx_inference import (
+    is_onnxruntime_available,
+    create_inference_session,
+)
+
+# Check availability
+if is_onnxruntime_available():
+    # Load and run ONNX model
+    session = create_inference_session("model.onnx", prefer_gpu=True)
+    outputs = session.run({"input": audio_data})
 ```
 
 ## Usage
@@ -209,9 +232,11 @@ ruff check src/
 - pretty-midi, music21
 
 ### Optional
-- essentia (for advanced features)
+- essentia (for advanced audio features)
 - demucs (for stem separation)
-- basic-pitch (for MIDI transcription)
+- basic-pitch (for MIDI transcription, Python 3.11 only)
+- onnxruntime (for ONNX model inference, Python 3.12+ compatible)
+- torchcodec (required by torchaudio 2.9+ for audio encoding/saving)
 
 ## License
 
