@@ -144,6 +144,31 @@ preprocessor = AudioPreprocessor()
 normalized = preprocessor.normalize(audio, sr)
 ```
 
+## Tutorial and Examples
+
+### Interactive Tutorial (Jupyter Notebook)
+
+We provide a comprehensive Jupyter notebook that demonstrates installation and usage:
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/yakuzadave/didactic-engine/blob/main/examples/tutorial.ipynb)
+
+**[examples/tutorial.ipynb](examples/tutorial.ipynb)** - Interactive tutorial covering:
+- Installation (local and Google Colab)
+- Basic usage examples
+- Individual component usage
+- Full pipeline execution
+- Output structure and dataset exploration
+- Troubleshooting tips
+
+### Python Examples
+
+See **[examples/example_usage.py](examples/example_usage.py)** for additional code examples including:
+- Basic usage
+- Advanced usage with Essentia
+- Batch processing
+- Custom configuration
+- Individual component access
+
 ## Output Directory Structure
 
 ```
