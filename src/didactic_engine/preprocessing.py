@@ -1,19 +1,23 @@
 """
 Audio preprocessing module using pydub.
 
-Provides utilities for audio preprocessing such as normalization, 
-filtering, and format conversion.
+Provides utilities for audio preprocessing such as normalization,
+silence trimming, resampling, and channel conversion.
 """
 
-from typing import Optional
+from typing import Tuple, TYPE_CHECKING
 import numpy as np
 from pydub import AudioSegment
-from pydub.effects import normalize, compress_dynamic_range
-import io
+from pydub.effects import normalize as pydub_normalize
+from pydub.silence import detect_nonsilent
+import librosa
+
+if TYPE_CHECKING:
+    from didactic_engine.config import PipelineConfig
 
 
 class AudioPreprocessor:
-    """Preprocess audio stems using pydub."""
+    """Preprocess audio using pydub and librosa."""
 
     def __init__(self):
         """Initialize the audio preprocessor."""
@@ -21,100 +25,156 @@ class AudioPreprocessor:
 
     def normalize(self, audio: np.ndarray, sample_rate: int) -> np.ndarray:
         """
-        Normalize audio to standard loudness.
+        Normalize audio to peak amplitude.
 
         Args:
-            audio: Input audio array (channels, samples).
+            audio: Input audio array (1D mono).
             sample_rate: Sample rate of the audio.
 
         Returns:
-            Normalized audio array.
+            Normalized audio array with peak amplitude ~1.0.
         """
         # Convert to pydub AudioSegment
         audio_segment = self._numpy_to_audiosegment(audio, sample_rate)
-        
-        # Apply normalization
-        normalized = normalize(audio_segment)
-        
+
+        # Apply peak normalization
+        normalized = pydub_normalize(audio_segment)
+
         # Convert back to numpy
         return self._audiosegment_to_numpy(normalized)
 
-    def compress(
-        self, audio: np.ndarray, sample_rate: int, threshold: float = -20.0
-    ) -> np.ndarray:
-        """
-        Apply dynamic range compression.
-
-        Args:
-            audio: Input audio array (channels, samples).
-            sample_rate: Sample rate of the audio.
-            threshold: Compression threshold in dB.
-
-        Returns:
-            Compressed audio array.
-        """
-        # Convert to pydub AudioSegment
-        audio_segment = self._numpy_to_audiosegment(audio, sample_rate)
-        
-        # Apply compression
-        compressed = compress_dynamic_range(audio_segment)
-        
-        # Convert back to numpy
-        return self._audiosegment_to_numpy(compressed)
-
     def trim_silence(
-        self, audio: np.ndarray, sample_rate: int, silence_thresh: int = -50
+        self,
+        audio: np.ndarray,
+        sample_rate: int,
+        thresh_db: float = -40.0,
+        keep_ms: int = 80,
     ) -> np.ndarray:
         """
         Trim silence from the beginning and end of audio.
 
+        Uses pydub's detect_nonsilent to find non-silent ranges and
+        keeps a bit of leading/trailing silence as specified.
+
         Args:
-            audio: Input audio array (channels, samples).
+            audio: Input audio array (1D mono).
             sample_rate: Sample rate of the audio.
-            silence_thresh: Silence threshold in dB.
+            thresh_db: Silence threshold in dBFS.
+            keep_ms: Milliseconds of silence to keep at start/end.
 
         Returns:
             Trimmed audio array.
         """
-        from pydub.silence import detect_leading_silence
-        
         # Convert to pydub AudioSegment
         audio_segment = self._numpy_to_audiosegment(audio, sample_rate)
-        
-        # Detect silence at start and end
-        start_trim = detect_leading_silence(audio_segment, silence_threshold=silence_thresh)
-        end_trim = detect_leading_silence(audio_segment.reverse(), silence_threshold=silence_thresh)
-        
+
+        # Detect non-silent ranges
+        nonsilent_ranges = detect_nonsilent(
+            audio_segment,
+            min_silence_len=100,
+            silence_thresh=thresh_db,
+            seek_step=10,
+        )
+
+        if not nonsilent_ranges:
+            # All silence - return as is
+            return audio
+
+        # Get first and last non-silent ranges
+        start_trim = max(0, nonsilent_ranges[0][0] - keep_ms)
+        end_trim = min(len(audio_segment), nonsilent_ranges[-1][1] + keep_ms)
+
         # Trim
-        duration = len(audio_segment)
-        trimmed = audio_segment[start_trim:duration-end_trim]
-        
+        trimmed = audio_segment[start_trim:end_trim]
+
         # Convert back to numpy
         return self._audiosegment_to_numpy(trimmed)
 
-    def apply_fade(
-        self, audio: np.ndarray, sample_rate: int, fade_in_ms: int = 10, fade_out_ms: int = 10
+    def resample(
+        self, audio: np.ndarray, orig_sr: int, target_sr: int
     ) -> np.ndarray:
         """
-        Apply fade in/out to audio.
+        Resample audio to target sample rate.
 
         Args:
-            audio: Input audio array (channels, samples).
-            sample_rate: Sample rate of the audio.
-            fade_in_ms: Fade in duration in milliseconds.
-            fade_out_ms: Fade out duration in milliseconds.
+            audio: Input audio array (1D mono).
+            orig_sr: Original sample rate.
+            target_sr: Target sample rate.
 
         Returns:
-            Audio array with fades applied.
+            Resampled audio array.
         """
-        # Convert to pydub AudioSegment
-        audio_segment = self._numpy_to_audiosegment(audio, sample_rate)
-        
-        # Apply fades
-        faded = audio_segment.fade_in(fade_in_ms).fade_out(fade_out_ms)
-        
-        # Convert back to numpy
-        return self._audiosegment_to_numpy(faded)
+        if orig_sr == target_sr:
+            return audio
+
+        return librosa.resample(audio, orig_sr=orig_sr, target_sr=target_sr)
+
+    def to_mono(self, audio: np.ndarray) -> np.ndarray:
+        """
+        Convert stereo audio to mono.
+
+        Args:
+            audio: Input audio array (1D or 2D).
+
+        Returns:
+            Mono audio array (1D).
+        """
+        if audio.ndim == 1:
+            return audio
+
+        # If 2D, average channels
+        if audio.ndim == 2:
+            # Handle both (channels, samples) and (samples, channels)
+            if audio.shape[0] <= 2:
+                # (channels, samples) format
+                return np.mean(audio, axis=0)
+            else:
+                # (samples, channels) format
+                return np.mean(audio, axis=1)
+
+        return audio
+
+    def preprocess(
+        self,
+        audio: np.ndarray,
+        sample_rate: int,
+        cfg: "PipelineConfig",
+    ) -> Tuple[np.ndarray, int]:
+        """
+        Orchestrate full preprocessing based on config flags.
+
+        Args:
+            audio: Input audio array.
+            sample_rate: Sample rate of the audio.
+            cfg: Pipeline configuration with preprocessing flags.
+
+        Returns:
+            Tuple of (preprocessed audio, output sample rate).
+        """
+        # Convert to mono if requested
+        if cfg.preprocess_mono:
+            audio = self.to_mono(audio)
+
+        # Resample if requested
+        output_sr = sample_rate
+        if cfg.preprocess_target_sr != sample_rate:
+            audio = self.resample(audio, sample_rate, cfg.preprocess_target_sr)
+            output_sr = cfg.preprocess_target_sr
+
+        # Trim silence if requested
+        if cfg.preprocess_trim_silence:
+            audio = self.trim_silence(
+                audio,
+                output_sr,
+                thresh_db=cfg.preprocess_silence_thresh_dbfs,
+                keep_ms=cfg.preprocess_keep_silence_ms,
+            )
+
+        # Normalize if requested
+        if cfg.preprocess_normalize:
+            audio = self.normalize(audio, output_sr)
+
+        return audio, output_sr
 
     def _numpy_to_audiosegment(
         self, audio: np.ndarray, sample_rate: int
@@ -123,35 +183,30 @@ class AudioPreprocessor:
         Convert numpy array to pydub AudioSegment.
 
         Args:
-            audio: Audio array (channels, samples).
+            audio: Audio array (1D mono or 2D stereo).
             sample_rate: Sample rate.
 
         Returns:
             AudioSegment object.
         """
-        # Ensure 2D array
-        if audio.ndim == 1:
-            audio = audio.reshape(1, -1)
-        
+        # Ensure 1D for mono
+        if audio.ndim == 2:
+            audio = self.to_mono(audio)
+
+        # Clip to prevent overflow
+        audio = np.clip(audio, -1.0, 1.0)
+
         # Convert to int16
         audio_int16 = (audio * 32767).astype(np.int16)
-        
-        # Interleave channels if stereo
-        if audio_int16.shape[0] == 2:
-            audio_int16 = np.stack([audio_int16[0], audio_int16[1]], axis=1).flatten()
-            channels = 2
-        else:
-            audio_int16 = audio_int16.flatten()
-            channels = 1
-        
+
         # Create AudioSegment
         audio_segment = AudioSegment(
             audio_int16.tobytes(),
             frame_rate=sample_rate,
             sample_width=2,
-            channels=channels
+            channels=1,
         )
-        
+
         return audio_segment
 
     def _audiosegment_to_numpy(self, audio_segment: AudioSegment) -> np.ndarray:
@@ -162,18 +217,17 @@ class AudioPreprocessor:
             audio_segment: AudioSegment object.
 
         Returns:
-            Audio array (channels, samples).
+            Audio array (1D mono).
         """
         # Get raw data
         samples = np.array(audio_segment.get_array_of_samples())
-        
+
         # Convert to float
         audio = samples.astype(np.float32) / 32768.0
-        
-        # Reshape for channels
+
+        # If stereo, convert to mono
         if audio_segment.channels == 2:
-            audio = audio.reshape(-1, 2).T
-        else:
-            audio = audio.reshape(1, -1)
-        
+            audio = audio.reshape(-1, 2)
+            audio = np.mean(audio, axis=1)
+
         return audio

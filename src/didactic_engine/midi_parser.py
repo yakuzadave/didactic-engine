@@ -4,8 +4,10 @@ MIDI parsing and manipulation module using pretty_midi.
 Provides utilities for parsing, analyzing, and modifying MIDI data.
 """
 
-from typing import List, Dict, Tuple, Optional, Any
+from pathlib import Path
+from typing import List, Dict, Tuple, Any, Union
 import pretty_midi
+import pandas as pd
 import numpy as np
 
 
@@ -16,7 +18,7 @@ class MIDIParser:
         """Initialize the MIDI parser."""
         pass
 
-    def load(self, midi_path: str) -> pretty_midi.PrettyMIDI:
+    def load(self, midi_path: Union[str, Path]) -> pretty_midi.PrettyMIDI:
         """
         Load a MIDI file.
 
@@ -26,70 +28,100 @@ class MIDIParser:
         Returns:
             PrettyMIDI object.
         """
-        return pretty_midi.PrettyMIDI(midi_path)
+        return pretty_midi.PrettyMIDI(str(midi_path))
 
-    def parse(self, midi_data: pretty_midi.PrettyMIDI) -> Dict[str, Any]:
+    def parse(self, midi_path: Union[str, Path]) -> Dict[str, Any]:
         """
-        Parse MIDI data and extract information.
+        Parse MIDI file and extract structured data.
+
+        Args:
+            midi_path: Path to the MIDI file.
+
+        Returns:
+            Dictionary containing:
+            - notes_df: DataFrame with columns: pitch, velocity, start_s, end_s,
+                        dur_s, instrument_index, instrument_name, program, is_drum
+            - tempo_map: List of dicts with time_s and tempo_bpm
+            - duration_s: Total duration in seconds
+            - total_notes: Total number of notes
+        """
+        midi_path = Path(midi_path)
+        pm = pretty_midi.PrettyMIDI(str(midi_path))
+
+        # Extract tempo map
+        tempo_times, tempos = pm.get_tempo_changes()
+        tempo_map = [
+            {"time_s": float(t), "tempo_bpm": float(tempo)}
+            for t, tempo in zip(tempo_times, tempos)
+        ]
+
+        # Extract notes into a list of dicts
+        notes_data = []
+        for inst_idx, instrument in enumerate(pm.instruments):
+            for note in instrument.notes:
+                notes_data.append({
+                    "pitch": note.pitch,
+                    "velocity": note.velocity,
+                    "start_s": float(note.start),
+                    "end_s": float(note.end),
+                    "dur_s": float(note.end - note.start),
+                    "instrument_index": inst_idx,
+                    "instrument_name": instrument.name or f"Instrument_{inst_idx}",
+                    "program": instrument.program,
+                    "is_drum": instrument.is_drum,
+                })
+
+        # Create DataFrame
+        notes_df = pd.DataFrame(notes_data)
+
+        return {
+            "notes_df": notes_df,
+            "tempo_map": tempo_map,
+            "duration_s": float(pm.get_end_time()),
+            "total_notes": len(notes_data),
+        }
+
+    def parse_midi_object(self, midi_data: pretty_midi.PrettyMIDI) -> Dict[str, Any]:
+        """
+        Parse a PrettyMIDI object and extract structured data.
 
         Args:
             midi_data: PrettyMIDI object.
 
         Returns:
-            Dictionary containing parsed MIDI information.
+            Dictionary containing notes_df, tempo_map, etc.
         """
-        info = {
-            "tempo_changes": [],
-            "time_signature_changes": [],
-            "key_signature_changes": [],
-            "instruments": [],
-            "total_notes": 0,
-            "duration": midi_data.get_end_time(),
-        }
-
-        # Extract tempo changes
+        # Extract tempo map
         tempo_times, tempos = midi_data.get_tempo_changes()
-        info["tempo_changes"] = [
-            {"time": float(t), "tempo": float(tempo)}
+        tempo_map = [
+            {"time_s": float(t), "tempo_bpm": float(tempo)}
             for t, tempo in zip(tempo_times, tempos)
         ]
 
-        # Extract time signatures
-        for ts in midi_data.time_signature_changes:
-            info["time_signature_changes"].append({
-                "time": float(ts.time),
-                "numerator": ts.numerator,
-                "denominator": ts.denominator,
-            })
-
-        # Extract key signatures
-        for ks in midi_data.key_signature_changes:
-            info["key_signature_changes"].append({
-                "time": float(ks.time),
-                "key_number": ks.key_number,
-            })
-
-        # Extract instrument information
-        for instrument in midi_data.instruments:
-            inst_info = {
-                "program": instrument.program,
-                "is_drum": instrument.is_drum,
-                "name": instrument.name,
-                "notes": [],
-            }
-            
+        # Extract notes
+        notes_data = []
+        for inst_idx, instrument in enumerate(midi_data.instruments):
             for note in instrument.notes:
-                inst_info["notes"].append({
+                notes_data.append({
                     "pitch": note.pitch,
-                    "start": float(note.start),
-                    "end": float(note.end),
                     "velocity": note.velocity,
+                    "start_s": float(note.start),
+                    "end_s": float(note.end),
+                    "dur_s": float(note.end - note.start),
+                    "instrument_index": inst_idx,
+                    "instrument_name": instrument.name or f"Instrument_{inst_idx}",
+                    "program": instrument.program,
+                    "is_drum": instrument.is_drum,
                 })
-                info["total_notes"] += 1
-            
-            info["instruments"].append(inst_info)
 
-        return info
+        notes_df = pd.DataFrame(notes_data)
+
+        return {
+            "notes_df": notes_df,
+            "tempo_map": tempo_map,
+            "duration_s": float(midi_data.get_end_time()),
+            "total_notes": len(notes_data),
+        }
 
     def extract_notes(
         self, midi_data: pretty_midi.PrettyMIDI
@@ -107,7 +139,7 @@ class MIDIParser:
         for instrument in midi_data.instruments:
             for note in instrument.notes:
                 notes.append((note.start, note.end, note.pitch, note.velocity))
-        
+
         # Sort by start time
         notes.sort(key=lambda x: x[0])
         return notes
@@ -144,8 +176,8 @@ class MIDIParser:
         Returns:
             Dictionary mapping grid index to list of notes in that segment.
         """
-        aligned_notes = {}
-        
+        aligned_notes: Dict[int, List[Dict[str, Any]]] = {}
+
         # Extract all notes
         all_notes = []
         for instrument in midi_data.instruments:
@@ -170,9 +202,7 @@ class MIDIParser:
 
                 # Check if note overlaps with this segment
                 if note_start < segment_end and note_end > segment_start:
-                    # Optionally quantize to grid
                     if quantize:
-                        # Snap start time to nearest grid point
                         note_copy = note.copy()
                         note_copy["start"] = segment_start
                         note_copy["original_start"] = note_start

@@ -4,18 +4,12 @@ Stem separation module using Demucs.
 Separates audio into individual stems (vocals, drums, bass, other).
 """
 
-import os
-import tempfile
+import shutil
 import subprocess
-from typing import Dict, List, Optional
+from pathlib import Path
+from typing import Dict, Optional, Union
 import numpy as np
 import soundfile as sf
-
-try:
-    import demucs
-    DEMUCS_AVAILABLE = True
-except ImportError:
-    DEMUCS_AVAILABLE = False
 
 
 class StemSeparator:
@@ -33,123 +27,153 @@ class StemSeparator:
         self.device = device
         self.stem_names = ["vocals", "drums", "bass", "other"]
 
+    def _check_demucs_available(self) -> bool:
+        """
+        Check if Demucs is available.
+
+        Returns:
+            True if Demucs CLI is available, False otherwise.
+        """
+        # Check CLI availability
+        if shutil.which("demucs") is not None:
+            return True
+
+        # Check Python module availability
+        try:
+            import demucs
+            return True
+        except ImportError:
+            return False
+
     def separate(
-        self, audio: np.ndarray, sample_rate: int, output_dir: Optional[str] = None
-    ) -> Dict[str, np.ndarray]:
+        self,
+        audio_path: Union[str, Path],
+        out_dir: Union[str, Path],
+    ) -> Dict[str, Path]:
         """
         Separate audio into stems.
 
         Args:
-            audio: Input audio array (channels, samples).
-            sample_rate: Sample rate of the audio.
-            output_dir: Directory to save separated stems. If None, uses temp directory.
+            audio_path: Path to input audio file.
+            out_dir: Directory to save separated stems.
 
         Returns:
-            Dictionary mapping stem names to audio arrays.
-        """
-        if not DEMUCS_AVAILABLE:
-            print("Warning: Demucs not installed. Using mock stem separation.")
-            return self._create_mock_stems(audio, sample_rate)
-        
-        # Create temporary directory if needed
-        if output_dir is None:
-            output_dir = tempfile.mkdtemp()
-        else:
-            os.makedirs(output_dir, exist_ok=True)
+            Dictionary mapping stem names to WAV file paths.
 
-        # Save input audio to temporary file
-        input_path = os.path.join(output_dir, "input.wav")
-        
-        # Prepare audio for saving
-        audio_to_save = audio.T if audio.ndim == 2 else audio
-        sf.write(input_path, audio_to_save, sample_rate)
+        Raises:
+            RuntimeError: If Demucs is not installed or separation fails.
+        """
+        audio_path = Path(audio_path)
+        out_dir = Path(out_dir)
+
+        if not self._check_demucs_available():
+            raise RuntimeError(
+                "Demucs is not installed or not available on PATH.\n"
+                "Please install Demucs:\n"
+                "  pip install demucs\n"
+                "Or for the latest version:\n"
+                "  pip install -U git+https://github.com/facebookresearch/demucs\n"
+                "Make sure the 'demucs' command is available in your PATH."
+            )
+
+        out_dir.mkdir(parents=True, exist_ok=True)
 
         # Run Demucs separation
+        cmd = [
+            "demucs",
+            "-n", self.model,
+            "--device", self.device,
+            "-o", str(out_dir),
+            str(audio_path),
+        ]
+
         try:
-            cmd = [
-                "demucs",
-                "--two-stems", "vocals",  # Simplified for faster processing
-                "-n", self.model,
-                "--device", self.device,
-                "-o", output_dir,
-                input_path,
-            ]
-            
-            # Note: For full separation, remove --two-stems flag
-            # This will separate into all 4 stems
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                check=False,
+                check=True,
             )
-            
-            if result.returncode != 0:
-                # Fallback: create mock stems by simple filtering
-                return self._create_mock_stems(audio, sample_rate)
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(
+                f"Demucs separation failed:\n{e.stderr}"
+            ) from e
+        except FileNotFoundError as e:
+            raise RuntimeError(
+                "Demucs command not found. Please install Demucs:\n"
+                "  pip install demucs"
+            ) from e
 
-        except FileNotFoundError:
-            # Demucs not installed or not in PATH, create mock stems
-            return self._create_mock_stems(audio, sample_rate)
+        # Discover all WAV files in output directory using rglob
+        wav_files = list(out_dir.rglob("*.wav"))
 
-        # Load separated stems
-        stems = {}
-        model_output_dir = os.path.join(output_dir, self.model, "input")
-        
-        for stem_name in ["vocals", "no_vocals"]:  # Two-stems mode
-            stem_path = os.path.join(model_output_dir, f"{stem_name}.wav")
-            if os.path.exists(stem_path):
-                stem_audio, _ = sf.read(stem_path)
-                if stem_audio.ndim == 1:
-                    stem_audio = stem_audio.reshape(1, -1)
-                else:
-                    stem_audio = stem_audio.T
-                stems[stem_name] = stem_audio
+        if not wav_files:
+            raise RuntimeError(
+                f"No WAV files found in {out_dir} after Demucs separation"
+            )
 
-        # Clean up temporary input file
-        if os.path.exists(input_path):
-            os.remove(input_path)
+        # Build dictionary keyed by canonical stem names
+        stems: Dict[str, Path] = {}
+        canonical_names = set(self.stem_names)
+
+        for wav_path in wav_files:
+            stem_name = wav_path.stem.lower()
+
+            # Check if it matches a canonical stem name
+            if stem_name in canonical_names:
+                stems[stem_name] = wav_path
+            elif stem_name == "no_vocals":
+                # Map no_vocals to accompaniment or other
+                stems["accompaniment"] = wav_path
+            else:
+                # Use filename as stem name
+                stems[stem_name] = wav_path
 
         return stems
 
-    def _create_mock_stems(
-        self, audio: np.ndarray, sample_rate: int
+    def separate_audio_array(
+        self,
+        audio: np.ndarray,
+        sample_rate: int,
+        out_dir: Union[str, Path],
     ) -> Dict[str, np.ndarray]:
         """
-        Create mock stems for testing when Demucs is not available.
+        Separate audio array into stems.
+
+        This is a convenience method that saves the audio to a temporary
+        file, runs separation, and loads the results back.
 
         Args:
-            audio: Input audio array.
+            audio: Input audio array (1D mono or 2D stereo).
             sample_rate: Sample rate of the audio.
+            out_dir: Directory to save separated stems.
 
         Returns:
-            Dictionary with mock stem data.
-        """
-        # Simple frequency-based splitting as mock separation
-        from scipy import signal
+            Dictionary mapping stem names to audio arrays.
 
-        stems = {}
-        
-        # Ensure audio is 2D
-        if audio.ndim == 1:
-            audio = audio.reshape(1, -1)
-        
-        # High-pass filter for "vocals" (simplified)
-        sos = signal.butter(4, 200, 'hp', fs=sample_rate, output='sos')
-        vocals = signal.sosfilt(sos, audio, axis=1)
-        stems["vocals"] = vocals
-        
-        # Low-pass filter for "bass"
-        sos = signal.butter(4, 250, 'lp', fs=sample_rate, output='sos')
-        bass = signal.sosfilt(sos, audio, axis=1)
-        stems["bass"] = bass
-        
-        # Band-pass for "drums"
-        sos = signal.butter(4, [100, 1000], 'bp', fs=sample_rate, output='sos')
-        drums = signal.sosfilt(sos, audio, axis=1)
-        stems["drums"] = drums
-        
-        # Residual for "other"
-        stems["other"] = audio - (vocals + bass + drums) / 3
-        
-        return stems
+        Raises:
+            RuntimeError: If Demucs is not installed or separation fails.
+        """
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        # Save input audio to temporary file
+        input_path = out_dir / "input_temp.wav"
+        sf.write(str(input_path), audio, sample_rate)
+
+        try:
+            # Run separation
+            stem_paths = self.separate(input_path, out_dir)
+
+            # Load separated stems
+            stems: Dict[str, np.ndarray] = {}
+            for stem_name, stem_path in stem_paths.items():
+                stem_audio, _ = sf.read(str(stem_path))
+                stems[stem_name] = stem_audio
+
+            return stems
+
+        finally:
+            # Clean up temporary input file
+            if input_path.exists():
+                input_path.unlink()

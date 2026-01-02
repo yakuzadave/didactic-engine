@@ -39,7 +39,9 @@ def export_midi_markdown(
         song_id: Song identifier for report title.
         stem_name: Name of the stem being exported.
     """
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    output_dir = os.path.dirname(output_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
 
     with open(output_path, "w") as f:
         f.write(f"# MIDI Analysis Report: {song_id}\n\n")
@@ -92,7 +94,9 @@ def export_full_report(
         results: Full pipeline results dictionary.
         output_path: Path to output Markdown file.
     """
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    output_dir = os.path.dirname(output_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
 
     with open(output_path, "w") as f:
         f.write("# Audio Processing Pipeline Report\n\n")

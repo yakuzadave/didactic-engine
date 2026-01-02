@@ -47,7 +47,9 @@ def export_abc(
             score.metadata.title = title
 
         # Create output directory
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        output_dir = os.path.dirname(output_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
 
         # Write to ABC format
         score.write("abc", fp=output_path)
@@ -138,7 +140,9 @@ def _write_error_file(output_path: str, error_message: str) -> None:
         output_path: Path to output file.
         error_message: Error message to write.
     """
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    output_dir = os.path.dirname(output_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
     with open(output_path, "w") as f:
         f.write(f"% ABC export failed: {error_message}\n")
         f.write("% Please check the input MIDI file or install music21.\n")

@@ -4,100 +4,109 @@ MIDI transcription module using Basic Pitch.
 Transcribes audio to MIDI using Spotify's Basic Pitch model.
 """
 
-import os
-from typing import Optional
-import numpy as np
-
-try:
-    from basic_pitch.inference import predict
-    from basic_pitch import ICASSP_2022_MODEL_PATH
-    BASIC_PITCH_AVAILABLE = True
-except ImportError:
-    BASIC_PITCH_AVAILABLE = False
-    ICASSP_2022_MODEL_PATH = None
+import shutil
+import subprocess
+from pathlib import Path
+from typing import Union
 
 
-class MIDITranscriber:
-    """Transcribe audio to MIDI using Basic Pitch."""
+class BasicPitchTranscriber:
+    """Transcribe audio to MIDI using Basic Pitch CLI."""
 
-    def __init__(self, model_path: Optional[str] = None):
+    def __init__(self):
         """
-        Initialize the MIDI transcriber.
+        Initialize the Basic Pitch transcriber.
 
-        Args:
-            model_path: Path to Basic Pitch model. If None, uses default.
-        
+        Checks for basic-pitch CLI availability.
+        """
+        self._check_available()
+
+    def _check_available(self) -> bool:
+        """
+        Check if basic-pitch CLI is available.
+
+        Returns:
+            True if basic-pitch is available.
+
         Raises:
-            ImportError: If basic_pitch is not installed.
+            RuntimeError: If basic-pitch is not installed.
         """
-        if not BASIC_PITCH_AVAILABLE:
-            raise ImportError(
-                "basic-pitch is not installed. Install it with: pip install basic-pitch"
+        if shutil.which("basic-pitch") is None:
+            raise RuntimeError(
+                "basic-pitch command not found. Please install Basic Pitch:\n"
+                "  pip install basic-pitch\n"
+                "and ensure it's on your PATH."
             )
-        
-        self.model_path = model_path or ICASSP_2022_MODEL_PATH
+        return True
 
     def transcribe(
         self,
-        audio: np.ndarray,
-        sample_rate: int,
-        onset_threshold: float = 0.5,
-        frame_threshold: float = 0.3,
-        minimum_note_length: float = 127.70,
-        minimum_frequency: Optional[float] = None,
-        maximum_frequency: Optional[float] = None,
-        multiple_pitch_bends: bool = False,
-    ) -> tuple:
+        stem_wav: Union[str, Path],
+        out_dir: Union[str, Path],
+    ) -> Path:
         """
-        Transcribe audio to MIDI.
+        Transcribe audio to MIDI using Basic Pitch CLI.
 
         Args:
-            audio: Input audio array (channels, samples) or (samples,).
-            sample_rate: Sample rate of the audio.
-            onset_threshold: Threshold for note onset detection.
-            frame_threshold: Threshold for frame-wise note detection.
-            minimum_note_length: Minimum note length in milliseconds.
-            minimum_frequency: Minimum frequency to transcribe (Hz).
-            maximum_frequency: Maximum frequency to transcribe (Hz).
-            multiple_pitch_bends: Whether to allow multiple pitch bends per note.
+            stem_wav: Path to input WAV file.
+            out_dir: Output directory for MIDI file.
 
         Returns:
-            Tuple of (model_output, midi_data, note_events)
+            Path to the generated MIDI file.
+
+        Raises:
+            RuntimeError: If transcription fails.
         """
-        # Ensure mono audio
-        if audio.ndim == 2:
-            if audio.shape[0] <= 2:  # (channels, samples)
-                audio = np.mean(audio, axis=0)
-            else:  # (samples, channels)
-                audio = np.mean(audio, axis=1)
-        
-        # Basic Pitch expects audio as 1D array
-        audio = audio.flatten()
+        stem_wav = Path(stem_wav)
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
 
-        # Run prediction
-        model_output, midi_data, note_events = predict(
-            audio,
-            sample_rate,
-            onset_threshold=onset_threshold,
-            frame_threshold=frame_threshold,
-            minimum_note_length=minimum_note_length,
-            minimum_frequency=minimum_frequency,
-            maximum_frequency=maximum_frequency,
-            multiple_pitch_bends=multiple_pitch_bends,
-        )
+        # Run basic-pitch CLI
+        cmd = [
+            "basic-pitch",
+            str(out_dir),
+            str(stem_wav),
+            "--save-midi",
+            "--no-sonify",
+        ]
 
-        return model_output, midi_data, note_events
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(
+                f"Basic Pitch transcription failed:\n{e.stderr}"
+            ) from e
+        except FileNotFoundError as e:
+            raise RuntimeError(
+                "basic-pitch command not found. Please install Basic Pitch:\n"
+                "  pip install basic-pitch"
+            ) from e
 
-    def save_midi(self, midi_data, output_path: str) -> None:
-        """
-        Save MIDI data to file.
+        # Find the newest .mid file in output directory
+        midi_files = list(out_dir.rglob("*.mid"))
 
-        Args:
-            midi_data: MIDI data from transcription.
-            output_path: Path to save MIDI file.
-        """
-        # Ensure output directory exists
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        
-        # Save MIDI file
-        midi_data.write(output_path)
+        if not midi_files:
+            raise RuntimeError(
+                f"No MIDI files found in {out_dir} after transcription"
+            )
+
+        # Get newest file by modification time
+        newest_midi = max(midi_files, key=lambda p: p.stat().st_mtime)
+
+        # Copy to canonical path
+        stem_name = stem_wav.stem
+        canonical_path = out_dir / f"{stem_name}.mid"
+
+        if newest_midi != canonical_path:
+            shutil.copy2(newest_midi, canonical_path)
+
+        return canonical_path
+
+
+# Legacy alias for backward compatibility
+MIDITranscriber = BasicPitchTranscriber
