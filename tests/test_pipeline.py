@@ -453,5 +453,160 @@ class TestONNXInference:
                 create_inference_session("/nonexistent/model.onnx")
 
 
+class TestBatchProcessing:
+    """Test batch processing functionality."""
+
+    def test_batch_processing_with_valid_files(self):
+        """Test batch processing with multiple valid WAV files."""
+        from didactic_engine.pipeline import AudioPipeline
+        from pathlib import Path
+        import soundfile as sf
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            
+            # Create multiple test WAV files
+            sample_rate = 22050
+            duration = 1.0
+            
+            input_files = []
+            for i in range(3):
+                # Create unique audio (different frequencies)
+                t = np.linspace(0, duration, int(sample_rate * duration), False)
+                audio = np.sin(2 * np.pi * (440 + i * 50) * t).astype(np.float32)
+                
+                wav_path = tmpdir_path / f"test_audio_{i}.wav"
+                sf.write(wav_path, audio, sample_rate)
+                input_files.append(wav_path)
+            
+            # Process batch
+            output_dir = tmpdir_path / "output"
+            results = AudioPipeline.process_batch(
+                input_files,
+                output_dir,
+                analysis_sr=22050,
+                use_essentia_features=False,
+                write_bar_chunks=False,  # Disable to speed up test
+            )
+            
+            # Verify results structure
+            assert "successful" in results
+            assert "failed" in results
+            assert "total" in results
+            assert "success_count" in results
+            assert "failure_count" in results
+            
+            # All should succeed
+            assert results["total"] == 3
+            assert results["success_count"] == 3
+            assert results["failure_count"] == 0
+            assert len(results["successful"]) == 3
+            assert len(results["failed"]) == 0
+
+    def test_batch_processing_with_custom_song_ids(self):
+        """Test batch processing with custom song IDs."""
+        from didactic_engine.pipeline import AudioPipeline
+        from pathlib import Path
+        import soundfile as sf
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            
+            # Create test WAV files
+            sample_rate = 22050
+            duration = 0.5
+            t = np.linspace(0, duration, int(sample_rate * duration), False)
+            audio = np.sin(2 * np.pi * 440 * t).astype(np.float32)
+            
+            input_files = []
+            for i in range(2):
+                wav_path = tmpdir_path / f"file_{i}.wav"
+                sf.write(wav_path, audio, sample_rate)
+                input_files.append(wav_path)
+            
+            # Custom song IDs
+            custom_ids = ["song_alpha", "song_beta"]
+            
+            # Process batch with custom IDs
+            output_dir = tmpdir_path / "output"
+            results = AudioPipeline.process_batch(
+                input_files,
+                output_dir,
+                song_ids=custom_ids,
+                analysis_sr=22050,
+                write_bar_chunks=False,
+            )
+            
+            # Verify custom IDs were used
+            assert results["success_count"] == 2
+            song_ids_used = [item[0] for item in results["successful"]]
+            assert "song_alpha" in song_ids_used
+            assert "song_beta" in song_ids_used
+
+    def test_batch_processing_with_missing_file(self):
+        """Test batch processing handles missing files gracefully."""
+        from didactic_engine.pipeline import AudioPipeline
+        from pathlib import Path
+        import soundfile as sf
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            
+            # Create one valid file
+            sample_rate = 22050
+            duration = 0.5
+            t = np.linspace(0, duration, int(sample_rate * duration), False)
+            audio = np.sin(2 * np.pi * 440 * t).astype(np.float32)
+            
+            valid_file = tmpdir_path / "valid.wav"
+            sf.write(valid_file, audio, sample_rate)
+            
+            # Reference a non-existent file
+            missing_file = tmpdir_path / "missing.wav"
+            
+            input_files = [valid_file, missing_file]
+            
+            # Process batch
+            output_dir = tmpdir_path / "output"
+            results = AudioPipeline.process_batch(
+                input_files,
+                output_dir,
+                analysis_sr=22050,
+                write_bar_chunks=False,
+            )
+            
+            # Should have 1 success and 1 failure
+            assert results["total"] == 2
+            assert results["success_count"] == 1
+            assert results["failure_count"] == 1
+            assert len(results["successful"]) == 1
+            assert len(results["failed"]) == 1
+
+    def test_batch_processing_song_ids_mismatch(self):
+        """Test that mismatched song_ids count raises ValueError."""
+        from didactic_engine.pipeline import AudioPipeline
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            
+            input_files = [
+                tmpdir_path / "file1.wav",
+                tmpdir_path / "file2.wav",
+            ]
+            
+            # Wrong number of song IDs
+            wrong_ids = ["id1"]  # Only 1 ID for 2 files
+            
+            output_dir = tmpdir_path / "output"
+            
+            with pytest.raises(ValueError, match="must match"):
+                AudioPipeline.process_batch(
+                    input_files,
+                    output_dir,
+                    song_ids=wrong_ids,
+                )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
