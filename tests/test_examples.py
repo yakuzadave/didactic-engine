@@ -261,7 +261,7 @@ class TestExampleNotebookCompatibility:
         # Create synthetic audio as in notebook
         duration = 2.0
         sample_rate = 22050
-        t = np.linspace(0, duration, int(sample_rate * duration))
+        t = np.linspace(0, duration, int(sample_rate * duration), endpoint=False)
         audio = np.sin(2 * np.pi * 440 * t).astype(np.float32)
         
         # Analyze as in notebook
