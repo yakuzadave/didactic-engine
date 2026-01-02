@@ -31,7 +31,8 @@ def flatten_dict(
         >>> flatten_dict({"level1": {"level2": {"value": 10}}})
         {"level1.level2.value": 10}
     """
-    items: list[tuple[str, Any]] = []
+    from typing import List, Tuple
+    items: List[Tuple[str, Any]] = []
 
     for k, v in d.items():
         new_key = f"{parent_key}{sep}{k}" if parent_key else k
@@ -69,7 +70,8 @@ def flatten_dict_for_parquet(
     Returns:
         Flattened dictionary suitable for Parquet storage.
     """
-    items: list[tuple[str, Any]] = []
+    from typing import List, Tuple
+    items: List[Tuple[str, Any]] = []
 
     for k, v in d.items():
         new_key = f"{parent_key}{sep}{k}" if parent_key else k
