@@ -1,8 +1,43 @@
 """
 Essentia feature extraction module.
 
-Provides optional audio analysis using the Essentia library.
-If Essentia is not installed, functions return appropriate fallback values.
+This module provides optional audio analysis using the Essentia library.
+Essentia offers additional audio features not available in librosa, including
+Stevens loudness and EBU R128 loudness measurements.
+
+Key Functions:
+    - :func:`extract_essentia_features`: Extract features from WAV file
+    - :func:`extract_essentia_features_from_array`: Extract from numpy array
+
+Optional Dependency:
+    Essentia is optional and must be installed separately::
+    
+        pip install essentia
+        
+    If Essentia is not installed, functions return a dict with
+    ``available=False`` instead of raising an exception.
+
+Features Extracted:
+    - Stevens Loudness (perceptual loudness)
+    - EBU R128 Integrated Loudness (broadcast standard)
+    - Spectral Centroid statistics (mean/std/min/max)
+    - MFCC coefficients (13 coefficients with mean/std)
+
+Integration:
+    Essentia features can be enabled in the pipeline via
+    ``use_essentia=True`` in PipelineConfig. They're merged with
+    librosa features in analysis results.
+
+Example:
+    >>> features = extract_essentia_features("vocals.wav", sample_rate=44100)
+    >>> if features["available"]:
+    ...     print(f"Loudness: {features['loudness']:.2f}")
+    ... else:
+    ...     print(f"Essentia not available: {features['error']}")
+
+See Also:
+    - :mod:`didactic_engine.analysis` for librosa features
+    - :class:`didactic_engine.config.PipelineConfig` for enabling Essentia
 """
 
 from pathlib import Path
@@ -14,21 +49,43 @@ def extract_essentia_features(
     wav_path: Union[str, Path],
     sample_rate: int = 44100,
 ) -> Dict[str, Any]:
-    """
-    Extract audio features using Essentia.
+    """Extract audio features using Essentia from a WAV file.
+
+    Loads audio with Essentia's MonoLoader and extracts loudness,
+    spectral, and MFCC features.
 
     Args:
         wav_path: Path to WAV file.
-        sample_rate: Sample rate for analysis.
+        sample_rate: Sample rate for analysis. Default 44100.
 
     Returns:
-        Dictionary containing extracted features or error info if Essentia
-        is not installed. Keys include:
-        - available: bool indicating if Essentia is available
-        - error: error message if not available
-        - loudness: Stevens loudness value
-        - spectral_centroid_mean/std/min/max: spectral centroid statistics
-        - mfcc_XX_mean/std: MFCC statistics for coefficients 0-12
+        Dictionary with either:
+        
+        If Essentia is available and extraction succeeds:
+            - ``available``: True
+            - ``loudness``: Stevens loudness value
+            - ``loudness_ebu_r128``: EBU R128 integrated loudness (LUFS)
+            - ``spectral_centroid_mean/std/min/max``: Spectral centroid stats
+            - ``mfcc_00_mean`` through ``mfcc_12_mean``: MFCC means
+            - ``mfcc_00_std`` through ``mfcc_12_std``: MFCC std deviations
+            
+        If Essentia is unavailable:
+            - ``available``: False
+            - ``error``: Description of the problem
+
+    Example:
+        >>> features = extract_essentia_features("vocals.wav")
+        >>> if features["available"]:
+        ...     print(f"Loudness: {features['loudness']:.2f}")
+        ...     print(f"Centroid mean: {features['spectral_centroid_mean']:.0f}")
+
+    Note:
+        Some features (like EBU R128) may not be available in all Essentia
+        builds. Individual feature errors are captured in keys like
+        ``loudness_ebu_r128_error`` rather than failing the entire call.
+
+    See Also:
+        - :func:`extract_essentia_features_from_array` for numpy input
     """
     try:
         import essentia.standard as es
@@ -125,15 +182,41 @@ def extract_essentia_features_from_array(
     audio: np.ndarray,
     sample_rate: int = 44100,
 ) -> Dict[str, Any]:
-    """
-    Extract Essentia features from a numpy array.
+    """Extract Essentia features from a numpy audio array.
+
+    Same features as :func:`extract_essentia_features` but works
+    directly with numpy arrays instead of files.
 
     Args:
-        audio: Audio array (1D mono).
+        audio: Audio array (1D mono). Values should be float32 in
+            approximate range [-1, 1].
         sample_rate: Sample rate of the audio.
 
     Returns:
-        Dictionary containing extracted features.
+        Dictionary with same structure as :func:`extract_essentia_features`:
+        
+        If successful:
+            - ``available``: True
+            - ``loudness``: Stevens loudness
+            - ``spectral_centroid_*``: Centroid statistics
+            - ``mfcc_*``: MFCC statistics
+            
+        If unavailable:
+            - ``available``: False
+            - ``error``: Error description
+
+    Example:
+        >>> audio, sr = librosa.load("song.wav", sr=44100, mono=True)
+        >>> features = extract_essentia_features_from_array(audio, sr)
+        >>> if features["available"]:
+        ...     print(f"Loudness: {features['loudness']:.2f}")
+
+    Note:
+        Multi-channel audio is converted to mono by averaging channels.
+        Audio is converted to float32 if needed.
+
+    See Also:
+        - :func:`extract_essentia_features` for file input
     """
     try:
         import essentia.standard as es

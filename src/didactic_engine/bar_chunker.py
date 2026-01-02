@@ -1,7 +1,32 @@
 """
 Bar chunking module.
 
-Provides functions to compute bar boundaries and write per-bar audio chunks.
+This module provides high-level functions for computing bar boundaries and
+writing per-bar audio chunks. It wraps the lower-level segmentation functions
+and optionally integrates feature extraction.
+
+Key Functions:
+    - :func:`compute_bar_boundaries`: Calculate bar start/end times
+    - :func:`write_bar_chunks`: Write bar audio chunks to disk
+    - :func:`write_bar_chunks_with_features`: Chunks + feature extraction
+
+Integration:
+    Bar chunking is typically used after analysis (beat detection) and before
+    feature extraction. The chunks enable bar-level analysis and ML training.
+
+Example:
+    >>> boundaries = compute_bar_boundaries(
+    ...     beat_times, tempo_bpm=120, ts_num=4, ts_den=4,
+    ...     audio_duration_s=60.0
+    ... )
+    >>> chunks_meta = write_bar_chunks(
+    ...     "vocals.wav", "output/chunks", beat_times, 120.0
+    ... )
+
+See Also:
+    - :mod:`didactic_engine.segmentation` for lower-level functions
+    - :mod:`didactic_engine.features` for feature extraction
+    - :mod:`didactic_engine.analysis` for beat detection
 """
 
 from pathlib import Path
@@ -19,20 +44,39 @@ def compute_bar_boundaries(
     ts_den: int = 4,
     audio_duration_s: float = None,
 ) -> List[Tuple[int, float, float]]:
-    """
-    Compute bar boundaries from beat times.
+    """Compute bar boundaries from beat times.
 
-    Uses beat extrapolation if beat_times doesn't cover the full audio duration.
+    High-level wrapper around :func:`segmentation.segment_beats_into_bars`
+    with sensible defaults and automatic duration handling.
 
     Args:
-        beat_times: List of beat times in seconds.
-        tempo_bpm: Tempo in beats per minute.
-        ts_num: Time signature numerator.
-        ts_den: Time signature denominator.
-        audio_duration_s: Total audio duration in seconds.
+        beat_times: List of beat times in seconds from audio analysis.
+        tempo_bpm: Tempo in beats per minute. Used to extrapolate beats
+            if needed to cover the full audio duration.
+        ts_num: Time signature numerator. Default 4 (for 4/4 time).
+        ts_den: Time signature denominator. Default 4 (quarter note).
+        audio_duration_s: Total audio duration in seconds. If None,
+            inferred from beat_times plus one beat interval.
 
     Returns:
-        List of (bar_index, start_s, end_s) tuples.
+        List of (bar_index, start_s, end_s) tuples defining bar boundaries.
+        Each tuple contains:
+        - bar_index: 0-based bar number
+        - start_s: Bar start time in seconds
+        - end_s: Bar end time in seconds
+
+    Example:
+        >>> beat_times = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5]
+        >>> boundaries = compute_bar_boundaries(beat_times, 120)
+        >>> print(len(boundaries))  # Two 4/4 bars
+        2
+
+    Note:
+        If audio_duration_s is not provided, the function adds one beat
+        interval to the last beat time to estimate duration.
+
+    See Also:
+        - :func:`write_bar_chunks` for using boundaries to slice audio
     """
     if audio_duration_s is None and beat_times:
         audio_duration_s = max(beat_times) + (60.0 / tempo_bpm)
@@ -52,20 +96,43 @@ def write_bar_chunks(
     ts_num: int = 4,
     ts_den: int = 4,
 ) -> List[Dict[str, Any]]:
-    """
-    Write per-bar audio chunks from a WAV file.
+    """Write per-bar audio chunks from a WAV file.
+
+    Computes bar boundaries from beat times and slices the audio file
+    into individual bar chunks, saving each as a separate WAV file.
 
     Args:
         wav_path: Path to input WAV file.
-        out_dir: Output directory for bar chunks.
-        beat_times: List of beat times in seconds.
+        out_dir: Output directory for bar chunks. Created if needed.
+        beat_times: List of beat times in seconds from analysis.
         tempo_bpm: Tempo in beats per minute.
-        ts_num: Time signature numerator.
-        ts_den: Time signature denominator.
+        ts_num: Time signature numerator. Default 4.
+        ts_den: Time signature denominator. Default 4.
 
     Returns:
-        List of metadata dicts with: bar_index, start_s, end_s,
-        duration_s, chunk_path.
+        List of metadata dictionaries, one per bar:
+        - ``bar_index``: Bar number (0-based)
+        - ``start_s``: Chunk start time in seconds
+        - ``end_s``: Chunk end time in seconds
+        - ``duration_s``: Chunk duration in seconds
+        - ``chunk_path``: Path to the saved WAV file
+
+    Example:
+        >>> chunks = write_bar_chunks(
+        ...     "vocals.wav", "output/chunks",
+        ...     beat_times=[0.0, 0.5, 1.0, 1.5, 2.0],
+        ...     tempo_bpm=120
+        ... )
+        >>> print(chunks[0]["chunk_path"])
+        output/chunks/bar_0000.wav
+
+    Note:
+        Audio duration is automatically detected from the input file.
+        Files are named ``bar_XXXX.wav`` with zero-padded indices.
+
+    See Also:
+        - :func:`write_bar_chunks_with_features` for chunks + features
+        - :func:`compute_bar_boundaries` for boundary computation only
     """
     wav_path = Path(wav_path)
     out_dir = Path(out_dir)
@@ -94,22 +161,47 @@ def write_bar_chunks_with_features(
     sample_rate: int = 22050,
     use_essentia: bool = False,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """
-    Write bar chunks and extract features for each.
+    """Write bar chunks and extract audio features for each.
+
+    Combines chunking with feature extraction in a single operation.
+    Useful for building bar-level feature datasets.
 
     Args:
         wav_path: Path to input WAV file.
         out_dir: Output directory for bar chunks.
         beat_times: List of beat times in seconds.
         tempo_bpm: Tempo in beats per minute.
-        ts_num: Time signature numerator.
-        ts_den: Time signature denominator.
-        sample_rate: Sample rate for analysis.
-        use_essentia: Whether to extract Essentia features.
+        ts_num: Time signature numerator. Default 4.
+        ts_den: Time signature denominator. Default 4.
+        sample_rate: Sample rate for feature extraction. Default 22050.
+        use_essentia: If True, include Essentia features (requires
+            Essentia installation). Default False.
 
     Returns:
-        Tuple of (chunks_meta, chunk_features) where chunk_features is a
-        list of feature dicts for each chunk.
+        Tuple of (chunks_meta, chunk_features):
+        
+        - chunks_meta: List of chunk metadata dicts (same as write_bar_chunks)
+        - chunk_features: List of feature dicts, one per chunk, containing:
+            - Librosa features (spectral, MFCC, chroma)
+            - Optional Essentia features (if use_essentia=True)
+            - Bar metadata (bar_index, start_s, end_s, duration_s, chunk_path)
+
+    Example:
+        >>> meta, features = write_bar_chunks_with_features(
+        ...     "vocals.wav", "output/chunks",
+        ...     beat_times, tempo_bpm=120,
+        ...     use_essentia=False
+        ... )
+        >>> print(features[0].keys())
+        dict_keys(['rms', 'zcr', 'spectral_centroid_mean', ...])
+
+    Note:
+        Feature extraction adds significant processing time. For large
+        files, consider chunking first and extracting features separately.
+
+    See Also:
+        - :func:`write_bar_chunks` for chunking without features
+        - :class:`didactic_engine.features.FeatureExtractor` for feature details
     """
     from didactic_engine.features import FeatureExtractor
     from didactic_engine.essentia_features import extract_essentia_features

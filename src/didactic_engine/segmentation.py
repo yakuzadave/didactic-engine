@@ -1,7 +1,36 @@
 """
 Stem segmentation module.
 
-Segments audio stems into per-bar WAV chunks aligned to beat/bar grid.
+This module provides functions and the ``StemSegmenter`` class for dividing
+audio stems into per-bar WAV chunks aligned to a beat/bar grid derived from
+audio analysis.
+
+Key Features:
+    - Beat-to-bar boundary computation with time signature support
+    - Audio slicing using pydub for precise segment extraction
+    - Support for multiple stems simultaneously
+    - Arbitrary time interval segmentation
+
+Integration:
+    Segmentation occurs after analysis (to get beat grid) and separation
+    (to get individual stems). The resulting chunks can be used for:
+    - Per-bar feature extraction
+    - Training ML models on bar-level data
+    - Visual/audio inspection of specific bars
+
+Example:
+    >>> boundaries = segment_beats_into_bars(
+    ...     beat_times=[0.5, 1.0, 1.5, 2.0, 2.5, 3.0],
+    ...     tempo_bpm=120,
+    ...     ts_num=4, ts_den=4,
+    ...     audio_duration=10.0
+    ... )
+    >>> chunks_meta = segment_audio_by_bars("stem.wav", boundaries, "output/")
+
+See Also:
+    - :mod:`didactic_engine.analysis` for beat detection
+    - :mod:`didactic_engine.bar_chunker` for higher-level chunking
+    - :mod:`didactic_engine.features` for chunk feature extraction
 """
 
 from pathlib import Path
@@ -18,18 +47,50 @@ def segment_beats_into_bars(
     ts_den: int,
     audio_duration: float,
 ) -> List[Tuple[int, float, float]]:
-    """
-    Compute bar boundaries from beat times.
+    """Compute bar boundaries from beat times and time signature.
+
+    Takes a list of beat times and groups them into bars based on the
+    time signature. Handles beat grid extension if needed to cover
+    the full audio duration.
 
     Args:
-        beat_times: List of beat times in seconds.
-        tempo_bpm: Tempo in beats per minute.
-        ts_num: Time signature numerator (beats per bar).
-        ts_den: Time signature denominator (beat unit).
-        audio_duration: Total audio duration in seconds.
+        beat_times: List of beat times in seconds, typically from
+            :meth:`didactic_engine.analysis.AudioAnalyzer.extract_beat_times`.
+        tempo_bpm: Tempo in beats per minute. Used to extrapolate
+            additional beats if beat_times doesn't cover full duration.
+        ts_num: Time signature numerator (beats per bar). Common values:
+            4 for 4/4, 3 for 3/4, 6 for 6/8.
+        ts_den: Time signature denominator (beat unit). Common values:
+            4 for quarter note, 8 for eighth note.
+        audio_duration: Total audio duration in seconds. Used to ensure
+            bar boundaries extend to cover the entire audio.
 
     Returns:
-        List of (bar_index, start_s, end_s) tuples.
+        List of tuples (bar_index, start_s, end_s) where:
+        - bar_index: 0-based bar number
+        - start_s: Bar start time in seconds
+        - end_s: Bar end time in seconds (clamped to audio_duration)
+        
+        Zero-length bars are excluded from the output.
+
+    Example:
+        >>> beats = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5]
+        >>> boundaries = segment_beats_into_bars(
+        ...     beats, tempo_bpm=120, ts_num=4, ts_den=4, audio_duration=4.0
+        ... )
+        >>> print(boundaries[0])  # First bar
+        (0, 0.0, 2.0)
+        >>> print(boundaries[1])  # Second bar
+        (1, 2.0, 4.0)
+
+    Note:
+        The beats_per_bar formula is: ts_num * (4.0 / ts_den)
+        - 4/4 time: 4 * (4/4) = 4 beats per bar
+        - 3/4 time: 3 * (4/4) = 3 beats per bar
+        - 6/8 time: 6 * (4/8) = 3 beats per bar
+
+    See Also:
+        - :func:`segment_audio_by_bars` for slicing audio at boundaries
     """
     # Convert to numpy array
     beat_array = np.array(beat_times, dtype=float)
@@ -86,17 +147,40 @@ def segment_audio_by_bars(
     boundaries: List[Tuple[int, float, float]],
     out_dir: Union[str, Path],
 ) -> List[Dict[str, Any]]:
-    """
-    Segment audio file into per-bar chunks.
+    """Segment an audio file into per-bar WAV chunks.
+
+    Takes bar boundaries and slices the audio file into individual
+    chunks, one per bar. Each chunk is saved as a separate WAV file.
 
     Args:
-        audio_path: Path to audio file.
-        boundaries: List of (bar_index, start_s, end_s) tuples.
-        out_dir: Output directory for chunks.
+        audio_path: Path to input audio file. Supports WAV and other
+            formats readable by pydub (requires ffmpeg for some formats).
+        boundaries: List of (bar_index, start_s, end_s) tuples from
+            :func:`segment_beats_into_bars`.
+        out_dir: Output directory for chunk WAV files. Created if it
+            doesn't exist.
 
     Returns:
-        List of metadata dicts with: bar_index, start_s, end_s,
-        duration_s, chunk_path.
+        List of metadata dictionaries, one per bar chunk:
+        - ``bar_index``: Bar number (matches input boundaries)
+        - ``start_s``: Chunk start time in seconds
+        - ``end_s``: Chunk end time in seconds
+        - ``duration_s``: Chunk duration (end_s - start_s)
+        - ``chunk_path``: Absolute path to the saved WAV file
+
+    Example:
+        >>> boundaries = [(0, 0.0, 2.0), (1, 2.0, 4.0)]
+        >>> chunks = segment_audio_by_bars("vocals.wav", boundaries, "chunks/")
+        >>> print(chunks[0]["chunk_path"])
+        chunks/bar_0000.wav
+
+    Note:
+        Files are named ``bar_XXXX.wav`` where XXXX is the zero-padded
+        bar index. pydub handles the conversion internally.
+
+    See Also:
+        - :func:`segment_beats_into_bars` for computing boundaries
+        - :class:`StemSegmenter` for class-based segmentation
     """
     audio_path = Path(audio_path)
     out_dir = Path(out_dir)
@@ -131,10 +215,35 @@ def segment_audio_by_bars(
 
 
 class StemSegmenter:
-    """Segment audio stems into per-bar chunks."""
+    """Class-based interface for segmenting audio stems into chunks.
+    
+    Provides methods for segmenting audio by bar times, time intervals,
+    or processing multiple stems at once.
+    
+    The class is stateless—all data is passed to methods directly.
+    For function-based segmentation, see :func:`segment_beats_into_bars`
+    and :func:`segment_audio_by_bars`.
+    
+    Example:
+        >>> segmenter = StemSegmenter()
+        >>> 
+        >>> # Segment by bar times
+        >>> bar_times = np.array([0.0, 2.0, 4.0, 6.0])
+        >>> chunks = segmenter.segment_by_bars(
+        ...     audio, sr, bar_times, "output/", stem_name="vocals"
+        ... )
+        >>> 
+        >>> # Segment multiple stems
+        >>> all_chunks = segmenter.segment_stems_by_bars(
+        ...     stems_dict, sr, bar_times, "output/"
+        ... )
+    """
 
     def __init__(self):
-        """Initialize the stem segmenter."""
+        """Initialize the stem segmenter.
+        
+        The segmenter is stateless—configuration is passed per-method.
+        """
         pass
 
     def segment_by_bars(
@@ -145,18 +254,34 @@ class StemSegmenter:
         output_dir: Union[str, Path],
         stem_name: str = "audio",
     ) -> List[str]:
-        """
-        Segment audio into per-bar chunks.
+        """Segment audio array into per-bar WAV chunks.
+
+        Unlike :func:`segment_audio_by_bars`, this method works directly
+        with numpy arrays instead of audio files.
 
         Args:
-            audio: Input audio array (1D or 2D).
-            sample_rate: Sample rate of the audio.
-            bar_times: Array of bar start times in seconds.
-            output_dir: Directory to save segmented chunks.
-            stem_name: Name of the stem for output filenames.
+            audio: Input audio array (1D mono or 2D stereo).
+            sample_rate: Sample rate in Hz.
+            bar_times: Array of bar start times in seconds. Each
+                consecutive pair defines a bar segment.
+            output_dir: Directory for output WAV files.
+            stem_name: Stem identifier for filenames.
 
         Returns:
-            List of paths to saved chunk files.
+            List of paths to saved chunk WAV files, in bar order.
+
+        Example:
+            >>> segmenter = StemSegmenter()
+            >>> bar_times = np.array([0.0, 2.0, 4.0])
+            >>> paths = segmenter.segment_by_bars(
+            ...     audio, 44100, bar_times, "output/", "vocals"
+            ... )
+            >>> print(paths[0])
+            output/vocals_bar_0000.wav
+
+        Note:
+            Files are named ``{stem_name}_bar_XXXX.wav``. The output
+            directory is created if it doesn't exist.
         """
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -197,17 +322,30 @@ class StemSegmenter:
         bar_times: np.ndarray,
         output_dir: Union[str, Path],
     ) -> Dict[str, List[str]]:
-        """
-        Segment multiple stems into per-bar chunks.
+        """Segment multiple stems into per-bar chunks simultaneously.
+
+        Convenience method for processing all stems from a separation
+        result with the same bar grid.
 
         Args:
             stems: Dictionary mapping stem names to audio arrays.
-            sample_rate: Sample rate of the audio.
+                Typical keys: 'vocals', 'drums', 'bass', 'other'.
+            sample_rate: Sample rate in Hz (same for all stems).
             bar_times: Array of bar start times in seconds.
-            output_dir: Directory to save segmented chunks.
+            output_dir: Base output directory. Each stem gets a subdirectory.
 
         Returns:
-            Dictionary mapping stem names to lists of chunk paths.
+            Dictionary mapping stem names to lists of chunk file paths.
+            Structure mirrors the input stems dictionary.
+
+        Example:
+            >>> segmenter = StemSegmenter()
+            >>> stems = {"vocals": vocals_audio, "bass": bass_audio}
+            >>> all_chunks = segmenter.segment_stems_by_bars(
+            ...     stems, 44100, bar_times, "output/"
+            ... )
+            >>> print(all_chunks["vocals"][0])
+            output/vocals/vocals_bar_0000.wav
         """
         output_dir = Path(output_dir)
         segmented_stems: Dict[str, List[str]] = {}
@@ -229,18 +367,35 @@ class StemSegmenter:
         output_dir: Union[str, Path],
         stem_name: str = "audio",
     ) -> List[str]:
-        """
-        Segment audio by arbitrary time intervals.
+        """Segment audio by arbitrary time intervals.
+
+        More flexible than bar-based segmentation—allows any time
+        boundaries. Useful for custom segmentation schemes.
 
         Args:
-            audio: Input audio array.
-            sample_rate: Sample rate of the audio.
+            audio: Input audio array (1D or 2D).
+            sample_rate: Sample rate in Hz.
             intervals: List of (start_time, end_time) tuples in seconds.
-            output_dir: Directory to save segmented chunks.
-            stem_name: Name of the stem for output filenames.
+                Intervals can overlap or have gaps.
+            output_dir: Directory for output WAV files.
+            stem_name: Stem identifier for filenames.
 
         Returns:
-            List of paths to saved chunk files.
+            List of paths to saved segment WAV files.
+
+        Example:
+            >>> segmenter = StemSegmenter()
+            >>> intervals = [(0.0, 1.5), (2.0, 3.5), (4.0, 5.5)]
+            >>> paths = segmenter.segment_by_time_intervals(
+            ...     audio, 44100, intervals, "output/", "custom"
+            ... )
+            >>> print(paths[0])
+            output/custom_segment_0000.wav
+
+        Note:
+            Files are named ``{stem_name}_segment_XXXX.wav``. Unlike
+            bar segmentation, segment indices correspond to interval
+            order, not musical position.
         """
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)

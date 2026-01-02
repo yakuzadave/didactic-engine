@@ -1,7 +1,30 @@
 """
 Export MIDI analysis to Markdown reports.
 
-Generates human-readable Markdown reports summarizing MIDI events by bar and stem.
+This module provides functions for generating human-readable Markdown reports
+from MIDI analysis data. Reports summarize MIDI events organized by bar and stem.
+
+Key Functions:
+    - :func:`pitch_to_name`: Convert MIDI pitch to note name (e.g., "C4")
+    - :func:`export_midi_markdown`: Export bar-grouped MIDI events
+    - :func:`export_full_report`: Export comprehensive pipeline report
+
+Integration:
+    Markdown export is typically the final step after analysis, transcription,
+    and alignment. Reports provide human-readable summaries of the pipeline
+    results.
+
+Example:
+    >>> export_midi_markdown(
+    ...     aligned_notes={0: notes_bar_0, 1: notes_bar_1},
+    ...     output_path="reports/midi_report.md",
+    ...     song_id="my_song",
+    ...     stem_name="vocals"
+    ... )
+
+See Also:
+    - :mod:`didactic_engine.export_abc` for ABC notation export
+    - :mod:`didactic_engine.align` for note alignment
 """
 
 from typing import Dict, List, Any
@@ -9,14 +32,29 @@ import os
 
 
 def pitch_to_name(pitch: int) -> str:
-    """
-    Convert MIDI pitch number to note name.
+    """Convert MIDI pitch number to note name with octave.
+
+    Converts a MIDI note number (0-127) to its musical notation
+    (e.g., "C4" for middle C, "F#5" for F-sharp in octave 5).
 
     Args:
-        pitch: MIDI pitch number (0-127).
+        pitch: MIDI pitch number (0-127). Middle C (C4) is 60.
 
     Returns:
-        Note name with octave (e.g., "C4", "F#5").
+        Note name with octave, using sharps for accidentals.
+        Format: "{note}{octave}" e.g., "C4", "F#5", "Bb3".
+
+    Example:
+        >>> pitch_to_name(60)
+        'C4'
+        >>> pitch_to_name(69)
+        'A4'
+        >>> pitch_to_name(61)
+        'C#4'
+
+    Note:
+        Uses sharps (not flats) for all accidentals. Octave numbering
+        follows MIDI convention where octave -1 starts at pitch 0.
     """
     notes = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
     octave = (pitch // 12) - 1
@@ -30,14 +68,33 @@ def export_midi_markdown(
     song_id: str = "audio",
     stem_name: str = "all",
 ) -> None:
-    """
-    Export MIDI analysis as Markdown report.
+    """Export MIDI analysis as a Markdown report.
+
+    Creates a formatted Markdown file with MIDI events organized by bar.
+    Each bar section contains a table of notes with timing and pitch info.
 
     Args:
-        aligned_notes: Dictionary mapping bar index to list of notes.
-        output_path: Path to output Markdown file.
-        song_id: Song identifier for report title.
-        stem_name: Name of the stem being exported.
+        aligned_notes: Dictionary mapping bar index to list of note dicts.
+            Each note dict should have keys: start, end, pitch, velocity.
+            Typically from :meth:`MIDIParser.align_to_grid`.
+        output_path: Path for output Markdown file. Parent directories
+            are created if needed.
+        song_id: Song identifier for the report title.
+        stem_name: Stem name for the report subtitle.
+
+    Example:
+        >>> aligned = {
+        ...     0: [{"start": 0.0, "end": 0.5, "pitch": 60, "velocity": 100}],
+        ...     1: [{"start": 2.0, "end": 2.5, "pitch": 62, "velocity": 90}],
+        ... }
+        >>> export_midi_markdown(aligned, "report.md", "song1", "vocals")
+
+    Note:
+        Output includes a table for each bar with columns:
+        Time (s), Pitch, Note, Velocity, Duration (s)
+
+    See Also:
+        - :func:`export_full_report` for comprehensive pipeline reports
     """
     output_dir = os.path.dirname(output_path)
     if output_dir:
@@ -87,12 +144,40 @@ def export_full_report(
     results: Dict[str, Any],
     output_path: str,
 ) -> None:
-    """
-    Export a comprehensive Markdown report from pipeline results.
+    """Export a comprehensive Markdown report from pipeline results.
+
+    Creates a full report summarizing all pipeline outputs including
+    audio info, analysis results, stems, MIDI info, and segmentation.
 
     Args:
-        results: Full pipeline results dictionary.
-        output_path: Path to output Markdown file.
+        results: Pipeline results dictionary. Expected keys:
+            - input_path: Path to input audio file
+            - sample_rate: Audio sample rate
+            - audio_shape: Shape of audio array
+            - analysis: Dict with tempo, beat_times, onset_times
+            - stem_names: List of separated stem names
+            - midi_info: Dict with total_notes, duration
+            - midi_path: Path to MIDI file
+            - segmented_stems: Dict mapping stem to chunk count
+            - features: Dict mapping stem to feature count
+            - aligned_notes: Dict of bar index to notes
+        output_path: Path for output Markdown file.
+
+    Example:
+        >>> results = {
+        ...     "input_path": "song.wav",
+        ...     "sample_rate": 44100,
+        ...     "analysis": {"tempo": 120.0, "beat_times": [...]},
+        ...     "stem_names": ["vocals", "drums", "bass", "other"],
+        ...     ...
+        ... }
+        >>> export_full_report(results, "full_report.md")
+
+    Note:
+        Missing keys in results are handled gracefully with "N/A" values.
+
+    See Also:
+        - :func:`export_midi_markdown` for MIDI-only reports
     """
     output_dir = os.path.dirname(output_path)
     if output_dir:
