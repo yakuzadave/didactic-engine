@@ -7,7 +7,7 @@ output directory paths.
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -44,6 +44,14 @@ class PipelineConfig:
         basic_pitch_backend: Basic Pitch inference backend ('tf', 'onnx', 'tflite', 'coreml').
         demucs_timeout_s: Optional timeout (seconds) for Demucs separation.
         basic_pitch_timeout_s: Optional timeout (seconds) for Basic Pitch transcription.
+        quantize_midi: Whether to quantize MIDI notes before ABC export.
+        quantize_division: Rhythmic division for quantization (16=sixteenth notes, 8=eighth notes).
+        quantize_min_duration: Optional minimum note duration in seconds after quantization.
+        use_stem_selector: Whether to use automatic stem selection for melody transcription.
+        stem_selector_candidates: Tuple of stem names to consider for melody selection.
+        export_metadata_jsonl: Whether to export metadata.jsonl for HuggingFace AudioFolder.
+        abc_trigger_token: Trigger token for ABC-based prompts (default "abcstyle").
+        abc_max_chars: Maximum characters for ABC text in prompts (default 2500).
     """
 
     song_id: str
@@ -69,6 +77,14 @@ class PipelineConfig:
     basic_pitch_backend: str = "tf"
     demucs_timeout_s: Optional[float] = None
     basic_pitch_timeout_s: Optional[float] = None
+    quantize_midi: bool = False
+    quantize_division: int = 16
+    quantize_min_duration: Optional[float] = None
+    use_stem_selector: bool = False
+    stem_selector_candidates: Tuple[str, ...] = ("vocals", "other", "bass")
+    export_metadata_jsonl: bool = False
+    abc_trigger_token: str = "abcstyle"
+    abc_max_chars: int = 2500
 
     def __post_init__(self) -> None:
         """Convert string paths to Path objects if needed."""

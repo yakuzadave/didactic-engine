@@ -1066,3 +1066,196 @@ class TestBasicPitchTranscriber:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestStemSelector:
+    """Test stem selection functionality."""
+
+    def test_score_melody_stem(self):
+        """Test melody scoring."""
+        from didactic_engine.stem_selector import score_melody_stem
+        
+        # Test with sine wave (clear pitch)
+        sr = 22050
+        duration = 2.0
+        t = np.linspace(0, duration, int(sr * duration))
+        audio = np.sin(2 * np.pi * 440 * t).astype(np.float32)
+        
+        score = score_melody_stem(audio, sr)
+        
+        # Sine wave should score relatively high
+        assert score > 0.5, f"Sine wave should score > 0.5, got {score}"
+        
+    def test_score_melody_stem_short_audio(self):
+        """Test scoring with audio shorter than 1 second."""
+        from didactic_engine.stem_selector import score_melody_stem
+        
+        # Very short audio should return 0
+        audio = np.random.randn(1000).astype(np.float32)
+        score = score_melody_stem(audio, 22050)
+        
+        assert score == 0.0, "Short audio should score 0.0"
+
+
+class TestMIDIQuantizer:
+    """Test MIDI quantization functionality."""
+
+    def test_quantize_notes(self):
+        """Test note quantization."""
+        from didactic_engine.midi_quantizer import quantize_notes
+        import pandas as pd
+        
+        # Create test notes with imperfect timing
+        notes = pd.DataFrame({
+            'start_time': [0.0, 0.52, 1.03],
+            'end_time': [0.48, 0.97, 1.51],
+            'pitch': [60, 62, 64],
+            'velocity': [100, 100, 100],
+        })
+        
+        quantized = quantize_notes(notes, tempo_bpm=120, division=16)
+        
+        # Check quantization worked
+        assert quantized['start_time'].iloc[0] == 0.0
+        assert quantized['start_time'].iloc[1] == 0.5
+        assert quantized['start_time'].iloc[2] == 1.0
+        
+        # Check end times
+        assert quantized['end_time'].iloc[0] == 0.5
+        assert quantized['end_time'].iloc[1] == 1.0
+        assert quantized['end_time'].iloc[2] == 1.5
+    
+    def test_quantize_notes_preserves_columns(self):
+        """Test that quantization preserves other columns."""
+        from didactic_engine.midi_quantizer import quantize_notes
+        import pandas as pd
+        
+        notes = pd.DataFrame({
+            'start_time': [0.0],
+            'end_time': [0.5],
+            'pitch': [60],
+            'velocity': [100],
+            'extra_col': ['test'],
+        })
+        
+        quantized = quantize_notes(notes, tempo_bpm=120, division=16)
+        
+        # Extra column should be preserved
+        assert 'extra_col' in quantized.columns
+        assert quantized['extra_col'].iloc[0] == 'test'
+
+
+class TestMetadataExport:
+    """Test metadata export functionality."""
+
+    def test_build_abc_prompt(self):
+        """Test ABC prompt building."""
+        from didactic_engine.metadata_export import build_abc_prompt
+        
+        abc = "X:1\nT:Test\nM:4/4\nK:C\nCDEF|"
+        prompt = build_abc_prompt(abc)
+        
+        assert "abcstyle" in prompt
+        assert "<abc>" in prompt
+        assert "</abc>" in prompt
+        assert abc in prompt
+    
+    def test_build_abc_prompt_truncation(self):
+        """Test ABC prompt truncation."""
+        from didactic_engine.metadata_export import build_abc_prompt
+        
+        # Create very long ABC
+        abc = "X:1\n" + "CDEF|" * 1000
+        prompt = build_abc_prompt(abc, max_chars=100)
+        
+        # Should be truncated
+        assert len(prompt) < len(abc) + 100
+        assert "..." in prompt
+    
+    def test_create_metadata_entry(self):
+        """Test metadata entry creation."""
+        from didactic_engine.metadata_export import create_metadata_entry
+        
+        entry = create_metadata_entry(
+            file_name="audio/test.wav",
+            abc_text="X:1\nCDEF|",
+            source_track="source.wav",
+            stem_used="vocals",
+            start_sec=0.0,
+            end_sec=15.0,
+            tempo_bpm=120.0,
+            sample_rate=22050,
+        )
+        
+        assert entry["file_name"] == "audio/test.wav"
+        assert "text" in entry
+        assert "abc_raw" in entry
+        assert entry["source_track"] == "source.wav"
+        assert entry["stem_used"] == "vocals"
+    
+    def test_export_metadata_jsonl(self):
+        """Test JSONL export."""
+        from didactic_engine.metadata_export import export_metadata_jsonl, load_metadata_jsonl
+        import tempfile
+        from pathlib import Path
+        
+        entries = [
+            {
+                "file_name": "audio/clip1.wav",
+                "text": "test prompt 1",
+                "abc_raw": "X:1",
+            },
+            {
+                "file_name": "audio/clip2.wav",
+                "text": "test prompt 2",
+                "abc_raw": "X:2",
+            },
+        ]
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "metadata.jsonl"
+            count = export_metadata_jsonl(entries, output_path)
+            
+            assert count == 2
+            assert output_path.exists()
+            
+            # Load and verify
+            loaded = load_metadata_jsonl(output_path)
+            assert len(loaded) == 2
+            assert loaded[0]["file_name"] == "audio/clip1.wav"
+            assert loaded[1]["file_name"] == "audio/clip2.wav"
+
+
+class TestExportABCText:
+    """Test ABC text export functionality."""
+
+    def test_export_abc_text_available(self):
+        """Test that export_abc_text function is available."""
+        from didactic_engine.export_abc import export_abc_text, MUSIC21_AVAILABLE
+        
+        # Function should exist
+        assert callable(export_abc_text)
+        
+        if not MUSIC21_AVAILABLE:
+            pytest.skip("music21 not installed")
+        
+        # Test with a simple MIDI file
+        with tempfile.TemporaryDirectory() as tmpdir:
+            midi_path = Path(tmpdir) / "test.mid"
+            
+            # Create a simple MIDI file
+            import pretty_midi
+            pm = pretty_midi.PrettyMIDI()
+            instrument = pretty_midi.Instrument(program=0)
+            note = pretty_midi.Note(velocity=100, pitch=60, start=0.0, end=0.5)
+            instrument.notes.append(note)
+            pm.instruments.append(instrument)
+            pm.write(str(midi_path))
+            
+            # Export to ABC text
+            abc_text = export_abc_text(str(midi_path), title="Test")
+            
+            # Should return a string (or None if music21 not installed)
+            if abc_text is not None:
+                assert isinstance(abc_text, str)
+                assert len(abc_text) > 0
