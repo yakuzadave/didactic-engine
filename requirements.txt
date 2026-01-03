@@ -1,16 +1,28 @@
-# Core audio processing
-numpy>=1.24.0
-scipy>=1.10.0
+# Base dependencies (keep in sync with pyproject.toml)
+numpy>=1.24.0,<2.0.0
+pandas>=2.0.0
+pyarrow>=12.0.0
 librosa>=0.10.0
 soundfile>=0.12.0
 pydub>=0.25.0
-
-# Stem separation
-demucs>=4.0.0
-
-# MIDI transcription and parsing
-basic-pitch>=0.2.0
 pretty-midi>=0.2.10
+music21>=9.1.0
 
-# Advanced audio analysis (optional - install separately if needed)
-# essentia>=2.1b6
+# Developer tooling / tests
+pytest>=7.0.0
+pytest-cov>=4.0.0
+ruff>=0.1.0
+mypy>=1.0.0
+marimo>=0.18.0
+
+# Optional extras (install as needed, or use pip install -e .[<extra>])
+# essentia>=2.1b5                # audio features (AGPL)
+# demucs>=4.0.0                  # stem separation (requires PyTorch)
+# basic-pitch>=0.2.0; python_version < "3.12"
+# onnxruntime>=1.14.0            # CPU ONNX runtime
+# onnxruntime-gpu>=1.16.0        # GPU ONNX runtime
+# torchcodec>=0.1.0
+# plotly>=5.0.0
+# kaleido>=0.2.0
+# tqdm>=4.65.0
+# polars>=0.20.0

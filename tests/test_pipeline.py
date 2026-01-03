@@ -622,5 +622,412 @@ class TestBatchProcessing:
                 )
 
 
+class TestChunkPathHandling:
+    """Test chunk_path None handling in bar features."""
+
+    def test_chunk_path_is_none_when_wavs_not_written(self):
+        """Test that chunk_path is None when write_bar_chunk_wavs=False."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+
+            # Create longer test audio with clear beat (10 seconds to ensure multiple bars)
+            sample_rate = 22050
+            duration = 10.0
+            t = np.linspace(0, duration, int(sample_rate * duration), False)
+            # Create a rhythmic beat pattern (120 BPM = 2 Hz)
+            audio = np.sin(2 * np.pi * 440 * t).astype(np.float32)
+            # Add some rhythmic structure
+            beat_freq = 2.0  # 120 BPM
+            envelope = 0.5 + 0.5 * np.sin(2 * np.pi * beat_freq * t)
+            audio = audio * envelope
+
+            wav_path = tmpdir_path / "test.wav"
+            sf.write(wav_path, audio, sample_rate)
+
+            # Create pipeline config with write_bar_chunk_wavs=False
+            from didactic_engine.config import PipelineConfig
+            cfg = PipelineConfig(
+                song_id="test_chunk_path",
+                input_wav=wav_path,
+                out_dir=tmpdir_path / "output",
+                analysis_sr=sample_rate,
+                write_bar_chunks=True,
+                write_bar_chunk_wavs=False,  # Don't write chunk files
+                use_pydub_preprocess=False,
+            )
+
+            # Run pipeline
+            from didactic_engine.pipeline import AudioPipeline
+            pipeline = AudioPipeline(cfg)
+            results = pipeline.run()
+
+            # Check if bar_features was created
+            if "bar_features_parquet" not in results:
+                pytest.skip("No bar features created - audio may be too short or beats not detected")
+
+            # Load bar features parquet
+            bar_features_path = Path(results["bar_features_parquet"])
+            assert bar_features_path.exists(), "Bar features parquet should exist"
+
+            import pandas as pd
+            df = pd.read_parquet(bar_features_path)
+
+            # Verify chunk_path is None for all rows
+            assert not df.empty, "Should have bar features"
+            assert "chunk_path" in df.columns, "chunk_path column should exist"
+            assert df["chunk_path"].isna().all(), "All chunk_path values should be None/NaN"
+
+    def test_chunk_path_is_string_when_wavs_written(self):
+        """Test that chunk_path is a valid path string when write_bar_chunk_wavs=True."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+
+            # Create longer test audio with clear beat (10 seconds to ensure multiple bars)
+            sample_rate = 22050
+            duration = 10.0
+            t = np.linspace(0, duration, int(sample_rate * duration), False)
+            # Create a rhythmic beat pattern (120 BPM = 2 Hz)
+            audio = np.sin(2 * np.pi * 440 * t).astype(np.float32)
+            # Add some rhythmic structure
+            beat_freq = 2.0  # 120 BPM
+            envelope = 0.5 + 0.5 * np.sin(2 * np.pi * beat_freq * t)
+            audio = audio * envelope
+
+            wav_path = tmpdir_path / "test.wav"
+            sf.write(wav_path, audio, sample_rate)
+
+            # Create pipeline config with write_bar_chunk_wavs=True
+            from didactic_engine.config import PipelineConfig
+            cfg = PipelineConfig(
+                song_id="test_chunk_path_written",
+                input_wav=wav_path,
+                out_dir=tmpdir_path / "output",
+                analysis_sr=sample_rate,
+                write_bar_chunks=True,
+                write_bar_chunk_wavs=True,  # Write chunk files
+                use_pydub_preprocess=False,
+            )
+
+            # Run pipeline
+            from didactic_engine.pipeline import AudioPipeline
+            pipeline = AudioPipeline(cfg)
+            results = pipeline.run()
+
+            # Check if bar_features was created
+            if "bar_features_parquet" not in results:
+                pytest.skip("No bar features created - audio may be too short or beats not detected")
+
+            # Load bar features parquet
+            bar_features_path = Path(results["bar_features_parquet"])
+            assert bar_features_path.exists(), "Bar features parquet should exist"
+
+            import pandas as pd
+            df = pd.read_parquet(bar_features_path)
+
+            # Verify chunk_path is a valid string for all rows
+            assert not df.empty, "Should have bar features"
+            assert "chunk_path" in df.columns, "chunk_path column should exist"
+            assert df["chunk_path"].notna().all(), "All chunk_path values should be non-null"
+
+            # Verify the files actually exist
+            for chunk_path_str in df["chunk_path"]:
+                chunk_path = Path(chunk_path_str)
+                assert chunk_path.exists(), f"Chunk file should exist: {chunk_path}"
+                assert chunk_path.suffix == ".wav", "Chunk should be a WAV file"
+
+
+class TestPreserveChunkAudio:
+    """Test preserve_chunk_audio feature."""
+
+    def test_preserve_chunk_audio_disabled(self):
+        """Test that chunks are mono at analysis_sr when preserve_chunk_audio=False."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+
+            # Create stereo test audio (10 seconds with rhythmic beat)
+            sample_rate = 44100
+            duration = 10.0
+            t = np.linspace(0, duration, int(sample_rate * duration), False)
+            # Create rhythmic structure
+            beat_freq = 2.0  # 120 BPM
+            envelope = 0.5 + 0.5 * np.sin(2 * np.pi * beat_freq * t)
+            left = (np.sin(2 * np.pi * 440 * t) * envelope).astype(np.float32)
+            right = (np.sin(2 * np.pi * 880 * t) * envelope).astype(np.float32)
+            stereo_audio = np.column_stack((left, right))
+
+            wav_path = tmpdir_path / "test_stereo.wav"
+            sf.write(wav_path, stereo_audio, sample_rate)
+
+            # Create pipeline config with preserve_chunk_audio=False
+            from didactic_engine.config import PipelineConfig
+            analysis_sr = 22050
+            cfg = PipelineConfig(
+                song_id="test_preserve_disabled",
+                input_wav=wav_path,
+                out_dir=tmpdir_path / "output",
+                analysis_sr=analysis_sr,
+                write_bar_chunks=True,
+                write_bar_chunk_wavs=True,
+                preserve_chunk_audio=False,  # Use analysis audio
+                use_pydub_preprocess=False,
+            )
+
+            # Run pipeline
+            from didactic_engine.pipeline import AudioPipeline
+            pipeline = AudioPipeline(cfg)
+            results = pipeline.run()
+
+            # Check chunk files
+            chunks_dir = cfg.chunks_dir / "full_mix"
+            if not chunks_dir.exists() or not list(chunks_dir.glob("*.wav")):
+                pytest.skip("No chunk files created - beats may not have been detected")
+
+            chunk_files = list(chunks_dir.glob("*.wav"))
+            assert len(chunk_files) > 0, "Should have chunk files"
+
+            # Verify first chunk is mono at analysis_sr
+            first_chunk = chunk_files[0]
+            chunk_audio, chunk_sr = sf.read(str(first_chunk))
+
+            assert chunk_sr == analysis_sr, f"Chunk SR should be {analysis_sr}, got {chunk_sr}"
+            assert chunk_audio.ndim == 1, "Chunk should be mono (1D array)"
+
+    def test_preserve_chunk_audio_enabled_stereo(self):
+        """Test that chunks preserve stereo when preserve_chunk_audio=True."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+
+            # Create stereo test audio (10 seconds with rhythmic beat)
+            sample_rate = 44100
+            duration = 10.0
+            t = np.linspace(0, duration, int(sample_rate * duration), False)
+            # Create rhythmic structure
+            beat_freq = 2.0  # 120 BPM
+            envelope = 0.5 + 0.5 * np.sin(2 * np.pi * beat_freq * t)
+            left = (np.sin(2 * np.pi * 440 * t) * envelope).astype(np.float32)
+            right = (np.sin(2 * np.pi * 880 * t) * envelope).astype(np.float32)
+            stereo_audio = np.column_stack((left, right))
+
+            wav_path = tmpdir_path / "test_stereo.wav"
+            sf.write(wav_path, stereo_audio, sample_rate)
+
+            # Create pipeline config with preserve_chunk_audio=True
+            from didactic_engine.config import PipelineConfig
+            analysis_sr = 22050
+            cfg = PipelineConfig(
+                song_id="test_preserve_enabled",
+                input_wav=wav_path,
+                out_dir=tmpdir_path / "output",
+                analysis_sr=analysis_sr,
+                write_bar_chunks=True,
+                write_bar_chunk_wavs=True,
+                preserve_chunk_audio=True,  # Preserve original
+                use_pydub_preprocess=False,
+            )
+
+            # Run pipeline
+            from didactic_engine.pipeline import AudioPipeline
+            pipeline = AudioPipeline(cfg)
+            results = pipeline.run()
+
+            # Check chunk files
+            chunks_dir = cfg.chunks_dir / "full_mix"
+            if not chunks_dir.exists() or not list(chunks_dir.glob("*.wav")):
+                pytest.skip("No chunk files created - beats may not have been detected")
+
+            chunk_files = list(chunks_dir.glob("*.wav"))
+            assert len(chunk_files) > 0, "Should have chunk files"
+
+            # Verify first chunk is stereo at original SR
+            first_chunk = chunk_files[0]
+            chunk_audio, chunk_sr = sf.read(str(first_chunk))
+
+            assert chunk_sr == sample_rate, f"Chunk SR should be {sample_rate}, got {chunk_sr}"
+            assert chunk_audio.ndim == 2, "Chunk should be stereo (2D array)"
+            assert chunk_audio.shape[1] == 2, "Chunk should have 2 channels"
+
+    def test_preserve_chunk_audio_enabled_mono(self):
+        """Test that mono files stay mono when preserve_chunk_audio=True."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+
+            # Create mono test audio at high sample rate (10 seconds with rhythmic beat)
+            sample_rate = 48000
+            duration = 10.0
+            t = np.linspace(0, duration, int(sample_rate * duration), False)
+            # Create rhythmic structure
+            beat_freq = 2.0  # 120 BPM
+            envelope = 0.5 + 0.5 * np.sin(2 * np.pi * beat_freq * t)
+            mono_audio = (np.sin(2 * np.pi * 440 * t) * envelope).astype(np.float32)
+
+            wav_path = tmpdir_path / "test_mono.wav"
+            sf.write(wav_path, mono_audio, sample_rate)
+
+            # Create pipeline config with preserve_chunk_audio=True
+            from didactic_engine.config import PipelineConfig
+            analysis_sr = 22050
+            cfg = PipelineConfig(
+                song_id="test_preserve_mono",
+                input_wav=wav_path,
+                out_dir=tmpdir_path / "output",
+                analysis_sr=analysis_sr,
+                write_bar_chunks=True,
+                write_bar_chunk_wavs=True,
+                preserve_chunk_audio=True,  # Preserve original
+                use_pydub_preprocess=False,
+            )
+
+            # Run pipeline
+            from didactic_engine.pipeline import AudioPipeline
+            pipeline = AudioPipeline(cfg)
+            results = pipeline.run()
+
+            # Check chunk files
+            chunks_dir = cfg.chunks_dir / "full_mix"
+            if not chunks_dir.exists() or not list(chunks_dir.glob("*.wav")):
+                pytest.skip("No chunk files created - beats may not have been detected")
+
+            chunk_files = list(chunks_dir.glob("*.wav"))
+            assert len(chunk_files) > 0, "Should have chunk files"
+
+            # Verify first chunk is mono at original SR
+            first_chunk = chunk_files[0]
+            chunk_audio, chunk_sr = sf.read(str(first_chunk))
+
+            assert chunk_sr == sample_rate, f"Chunk SR should be {sample_rate}, got {chunk_sr}"
+            assert chunk_audio.ndim == 1, "Chunk should be mono (1D array)"
+
+    def test_features_still_use_analysis_sr(self):
+        """Test that features still use analysis_sr even when preserve_chunk_audio=True."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+
+            # Create test audio at high sample rate (10 seconds with rhythmic beat)
+            sample_rate = 48000
+            duration = 10.0
+            t = np.linspace(0, duration, int(sample_rate * duration), False)
+            # Create rhythmic structure
+            beat_freq = 2.0  # 120 BPM
+            envelope = 0.5 + 0.5 * np.sin(2 * np.pi * beat_freq * t)
+            audio = (np.sin(2 * np.pi * 440 * t) * envelope).astype(np.float32)
+
+            wav_path = tmpdir_path / "test.wav"
+            sf.write(wav_path, audio, sample_rate)
+
+            # Create pipeline config with preserve_chunk_audio=True
+            from didactic_engine.config import PipelineConfig
+            analysis_sr = 22050
+            cfg = PipelineConfig(
+                song_id="test_features_sr",
+                input_wav=wav_path,
+                out_dir=tmpdir_path / "output",
+                analysis_sr=analysis_sr,
+                write_bar_chunks=True,
+                write_bar_chunk_wavs=True,
+                preserve_chunk_audio=True,
+                use_pydub_preprocess=False,
+            )
+
+            # Run pipeline
+            from didactic_engine.pipeline import AudioPipeline
+            pipeline = AudioPipeline(cfg)
+            results = pipeline.run()
+
+            # Check if bar_features was created
+            if "bar_features_parquet" not in results:
+                pytest.skip("No bar features created - audio may be too short or beats not detected")
+
+            # Load bar features parquet
+            bar_features_path = Path(results["bar_features_parquet"])
+            assert bar_features_path.exists(), "Bar features parquet should exist"
+
+            import pandas as pd
+            df = pd.read_parquet(bar_features_path)
+
+            # Features should be computed - verify we have feature columns
+            assert not df.empty, "Should have bar features"
+            assert "rms_energy" in df.columns, "Should have RMS energy feature"
+
+            # The features should be valid (not NaN) - features are computed from analysis_sr audio
+            assert df["rms_energy"].notna().all(), "RMS energy should be computed"
+
+
+class TestBasicPitchTranscriber:
+    """Test BasicPitchTranscriber functionality."""
+
+    def test_probe_model_serialization_support(self):
+        """Test that the model serialization support probe works correctly."""
+        try:
+            from didactic_engine.transcription import BasicPitchTranscriber
+        except ImportError:
+            pytest.skip("basic-pitch not installed")
+
+        # This should not raise an error even if basic-pitch is not installed
+        # or doesn't support --model-serialization
+        try:
+            transcriber = BasicPitchTranscriber()
+            # Probe should return a boolean
+            assert isinstance(transcriber._supports_model_serialization, bool)
+        except RuntimeError as e:
+            # If basic-pitch is not installed, we expect a RuntimeError
+            if "not found" not in str(e):
+                raise
+
+    def test_transcriber_initialization_without_basic_pitch(self, monkeypatch):
+        """Test that initialization fails gracefully when basic-pitch is not available."""
+        from didactic_engine.transcription import BasicPitchTranscriber
+        import shutil
+
+        # Mock shutil.which to simulate basic-pitch not being available
+        def mock_which(cmd):
+            if cmd == "basic-pitch":
+                return None
+            return shutil.which(cmd)
+
+        monkeypatch.setattr(shutil, "which", mock_which)
+
+        with pytest.raises(RuntimeError, match="basic-pitch command not found"):
+            BasicPitchTranscriber()
+
+    def test_transcriber_handles_unsupported_flag(self, monkeypatch):
+        """Test that transcriber handles CLI versions without --model-serialization."""
+        try:
+            from didactic_engine.transcription import BasicPitchTranscriber
+        except ImportError:
+            pytest.skip("basic-pitch not installed")
+
+        import subprocess
+        import shutil
+
+        # Mock shutil.which to simulate basic-pitch being available
+        def mock_which(cmd):
+            if cmd == "basic-pitch":
+                return "/usr/bin/basic-pitch"  # Fake path
+            return shutil.which(cmd)
+
+        # Mock the help output to not include --model-serialization
+        def mock_run(cmd, *args, **kwargs):
+            if cmd == ["basic-pitch", "--help"]:
+                # Return help text without --model-serialization flag
+                class MockResult:
+                    stdout = "Usage: basic-pitch [OPTIONS] OUTPUT INPUT\n\nOptions:\n  --save-midi"
+                    returncode = 0
+                return MockResult()
+            # Default for other commands
+            class MockResult:
+                stdout = ""
+                returncode = 0
+            return MockResult()
+
+        monkeypatch.setattr(shutil, "which", mock_which)
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+        # Recreate transcriber with mocked help output
+        transcriber = BasicPitchTranscriber(model_serialization="tf")
+
+        # Should detect that --model-serialization is not supported
+        assert transcriber._supports_model_serialization is False
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

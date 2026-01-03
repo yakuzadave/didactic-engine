@@ -42,6 +42,8 @@ from typing import Dict, Optional, Union
 import numpy as np
 import soundfile as sf
 
+from didactic_engine.subprocess_utils import run_checked
+
 
 class StemSeparator:
     """Separate audio into stems using Demucs.
@@ -74,7 +76,12 @@ class StemSeparator:
         ...         print(f"{name}: {path}")
     """
 
-    def __init__(self, model: str = "htdemucs", device: str = "cpu"):
+    def __init__(
+        self,
+        model: str = "htdemucs",
+        device: str = "cpu",
+        timeout_s: Optional[float] = None,
+    ):
         """Initialize the stem separator.
 
         Args:
@@ -101,6 +108,7 @@ class StemSeparator:
         """
         self.model = model
         self.device = device
+        self.timeout_s = timeout_s
         self.stem_names = ["vocals", "drums", "bass", "other"]
 
     def _check_demucs_available(self) -> bool:
@@ -208,22 +216,9 @@ class StemSeparator:
             str(audio_path),
         ]
 
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(
-                f"Demucs separation failed:\n{e.stderr}"
-            ) from e
-        except FileNotFoundError as e:
-            raise RuntimeError(
-                "Demucs command not found. Please install Demucs:\n"
-                "  pip install demucs"
-            ) from e
+        # Use centralized subprocess helper so timeouts and error messages
+        # are consistent and include the invoked command.
+        run_checked(cmd, timeout_s=self.timeout_s, tool_name="Demucs")
 
         # Discover all WAV files in output directory using rglob
         wav_files = list(out_dir.rglob("*.wav"))

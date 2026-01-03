@@ -42,7 +42,9 @@ See Also:
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Union
+from typing import Union, Optional
+
+from didactic_engine.subprocess_utils import run_checked
 
 
 class BasicPitchTranscriber:
@@ -74,7 +76,11 @@ class BasicPitchTranscriber:
         copying it to a canonical location.
     """
 
-    def __init__(self):
+    def __init__(
+        self,
+        model_serialization: str = "tf",
+        timeout_s: Optional[float] = None,
+    ):
         """Initialize the Basic Pitch transcriber.
 
         Checks for basic-pitch CLI availability at initialization. This
@@ -90,7 +96,10 @@ class BasicPitchTranscriber:
             ... except RuntimeError as e:
             ...     print(f"Setup required: {e}")
         """
+        self.model_serialization = model_serialization
+        self.timeout_s = timeout_s
         self._check_available()
+        self._supports_model_serialization = self._probe_model_serialization_support()
 
     def _check_available(self) -> bool:
         """Check if basic-pitch CLI is available.
@@ -115,6 +124,34 @@ class BasicPitchTranscriber:
                 "and ensure it's on your PATH."
             )
         return True
+
+    def _probe_model_serialization_support(self) -> bool:
+        """Probe if basic-pitch CLI supports --model-serialization flag.
+
+        Some older versions of basic-pitch don't accept the --model-serialization
+        flag. This method checks for support by running basic-pitch --help and
+        looking for the flag in the help text.
+
+        Returns:
+            True if --model-serialization is supported, False otherwise.
+
+        Note:
+            Called automatically during initialization. If the flag is not
+            supported, transcribe() will skip it to maintain compatibility.
+        """
+        try:
+            result = subprocess.run(
+                ["basic-pitch", "--help"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            # Check if --model-serialization appears in help text
+            return "--model-serialization" in result.stdout
+        except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
+            # If we can't determine support, assume it's not supported
+            # to maintain compatibility with older versions
+            return False
 
     def transcribe(
         self,
@@ -169,29 +206,37 @@ class BasicPitchTranscriber:
         out_dir.mkdir(parents=True, exist_ok=True)
 
         # Run basic-pitch CLI
-        cmd = [
-            "basic-pitch",
+        cmd = ["basic-pitch"]
+
+        # Prefer explicit backend selection. This is particularly useful on WSL where
+        # TensorFlow GPU libraries may not be available, but ONNX Runtime GPU can be.
+        # Only add flag if the CLI version supports it (compatibility with older versions).
+        if self.model_serialization and self._supports_model_serialization:
+            cmd.extend(["--model-serialization", self.model_serialization])
+
+        cmd.extend([
             str(out_dir),
             str(stem_wav),
             "--save-midi",
-        ]
+        ])
 
+        # Run via shared helper for consistent timeout/error reporting.
+        # If the requested backend isn't supported by the installed CLI, fall back
+        # to default behavior instead of failing the entire pipeline.
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(
-                f"Basic Pitch transcription failed:\n{e.stderr}"
-            ) from e
-        except FileNotFoundError as e:
-            raise RuntimeError(
-                "basic-pitch command not found. Please install Basic Pitch:\n"
-                "  pip install basic-pitch"
-            ) from e
+            run_checked(cmd, timeout_s=self.timeout_s, tool_name="Basic Pitch")
+        except RuntimeError as exc:
+            msg = str(exc)
+
+            # If we attempted to use --model-serialization and the CLI rejected it
+            # (some versions differ), retry once without it.
+            if "--model-serialization" in msg and any(
+                k in msg.lower() for k in ["unrecognized", "unknown option", "no such option"]
+            ):
+                fallback_cmd = [c for c in cmd if c not in ["--model-serialization", self.model_serialization]]
+                run_checked(fallback_cmd, timeout_s=self.timeout_s, tool_name="Basic Pitch")
+            else:
+                raise
 
         # Find the newest .mid file in output directory
         midi_files = list(out_dir.rglob("*.mid"))

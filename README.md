@@ -25,6 +25,23 @@ Didactic Engine is an end-to-end audio processing pipeline that:
 - Demucs CLI (for stem separation) - optional
 - Basic Pitch CLI (for MIDI transcription) - optional
 
+### Windows / WSL environment setup
+
+Full cross-platform setup (CPU and NVIDIA GPU) is documented in **[docs/environment.md](docs/environment.md)**. Quick start:
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate                 # PowerShell: .venv\Scripts\Activate.ps1
+pip install -e ".[dev]"                   # CPU build with tests/linting
+```
+
+For GPU acceleration (NVIDIA drivers required):
+
+```bash
+pip install --index-url https://download.pytorch.org/whl/cu121 torch torchvision torchaudio
+pip install -e ".[ml-gpu,dev]"            # ONNX Runtime GPU + Demucs + dev tools
+```
+
 ### Install from Source
 
 ```bash
@@ -357,6 +374,9 @@ data/
 
 ```bash
 pytest tests/ -v
+TMPDIR=/tmp TEMP=/tmp TMP=/tmp pytest -v   # WSL: avoid Windows temp dir issues
+pytest -m "not optional_deps and not integration"    # Skip heavy/optional stacks
+pytest -m gpu                                        # Only GPU-specific tests
 ```
 
 ### Code Style

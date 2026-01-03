@@ -5,11 +5,13 @@ Orchestrates the complete audio processing workflow from ingestion to feature ex
 """
 
 import json
+import logging
+import platform
 import shutil
+import time
 from pathlib import Path
-from typing import Dict, List, Any, Optional, TYPE_CHECKING
+from typing import Dict, List, Any, Optional, TYPE_CHECKING, Tuple
 
-import numpy as np
 import pandas as pd
 
 from didactic_engine.ingestion import WAVIngester
@@ -19,12 +21,37 @@ from didactic_engine.midi_parser import MIDIParser
 from didactic_engine.segmentation import segment_beats_into_bars, StemSegmenter
 from didactic_engine.features import FeatureExtractor
 from didactic_engine.align import align_notes_to_beats
-from didactic_engine.export_md import export_midi_markdown, export_full_report
+from didactic_engine.export_md import export_midi_markdown
 from didactic_engine.export_abc import export_abc
-from didactic_engine.utils_flatten import flatten_dict_for_parquet
 
 if TYPE_CHECKING:
     from didactic_engine.config import PipelineConfig
+
+
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
+
+
+class _PipelineStep:
+    """Lightweight context manager to log step start/completion with duration."""
+
+    def __init__(self, log: logging.Logger, name: str):
+        self.log = log
+        self.name = name
+        self.start_time = 0.0
+
+    def __enter__(self) -> "_PipelineStep":
+        self.start_time = time.time()
+        self.log.info(self.name)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        duration = time.time() - self.start_time
+        if exc_type is None:
+            self.log.info("%s completed in %.2fs", self.name, duration)
+        else:
+            self.log.exception("%s failed after %.2fs", self.name, duration)
+        return False
 
 
 class AudioPipeline:
@@ -36,14 +63,21 @@ class AudioPipeline:
     and extracts features.
     """
 
-    def __init__(self, cfg: "PipelineConfig"):
+    def __init__(
+        self,
+        cfg: "PipelineConfig",
+        logger: Optional[logging.Logger] = None,
+    ):
         """
         Initialize the audio pipeline.
 
         Args:
             cfg: Pipeline configuration.
+            logger: Optional logger to use for pipeline messages. Falls back to
+                the module logger when not provided.
         """
         self.cfg = cfg
+        self.logger = logger or logging.getLogger(__name__)
 
         # Initialize components
         self.ingester = WAVIngester(sample_rate=cfg.analysis_sr)
@@ -61,10 +95,17 @@ class AudioPipeline:
             Dictionary containing all processing results and output paths.
         """
         cfg = self.cfg
-        print(f"Starting audio processing pipeline for: {cfg.input_wav}")
+        self.logger.info(
+            "Starting audio processing pipeline for %s (song_id=%s)",
+            cfg.input_wav,
+            cfg.song_id,
+        )
 
-        # Create all output directories
         cfg.create_directories()
+
+        # Operational warnings for common slow / brittle environments.
+        # These are warnings only (no behavioral changes).
+        self._emit_environment_warnings()
 
         results: Dict[str, Any] = {
             "song_id": cfg.song_id,
@@ -72,207 +113,461 @@ class AudioPipeline:
             "output_dir": str(cfg.out_dir),
         }
 
-        # Step 1: Copy original input for traceability
-        print("Step 1: Copying input file...")
-        input_copy_path = cfg.input_dir / cfg.input_wav.name
-        shutil.copy2(cfg.input_wav, input_copy_path)
+        with self._step("Step 1: Copy input file"):
+            input_copy_path = self._copy_input()
         results["input_copy"] = str(input_copy_path)
 
-        # Step 2: Ingest WAV
-        print("Step 2: Ingesting WAV file...")
-        audio, sr = self.ingester.load(cfg.input_wav)
+        with self._step("Step 2: Ingest WAV file"):
+            audio, sr = self._ingest_audio()
+        results["sample_rate"] = sr
+        results["duration_s"] = float(len(audio) / sr)
+
+        with self._step("Step 3: Preprocess audio"):
+            audio, sr, preprocessed_path = self._maybe_preprocess(audio, sr)
+        if preprocessed_path:
+            results["preprocessed_path"] = str(preprocessed_path)
+
+        with self._step("Step 4: Analyze audio"):
+            analysis, tempo_bpm, beat_times = self._analyze_audio(
+                audio, sr, results["duration_s"]
+            )
+        results["analysis"] = {
+            "tempo_bpm": tempo_bpm,
+            "num_beats": len(beat_times),
+            "duration_s": results["duration_s"],
+            "essentia_available": analysis.get("essentia", {}).get("available", False),
+        }
+
+        with self._step("Step 5: Separate stems (Demucs)"):
+            stem_paths, separation_error = self._separate_stems()
+        results["stems"] = list(stem_paths.keys())
+        if separation_error:
+            results["stem_separation_error"] = separation_error
+
+        with self._step("Step 6: Compute bar boundaries"):
+            bar_boundaries = self._compute_bar_boundaries(
+                beat_times, tempo_bpm, results["duration_s"]
+            )
+        results["num_bars"] = len(bar_boundaries)
+
+        with self._step("Step 7: Process stems (chunks/transcription/align)"):
+            all_notes, all_bar_features, midi_results = self._process_stems(
+                stem_paths, bar_boundaries, beat_times, tempo_bpm
+            )
+        results.update(midi_results)
+
+        with self._step("Step 8: Build datasets"):
+            events_df, beats_df, bars_df, bar_features_df = self._build_datasets(
+                all_notes, beat_times, tempo_bpm, results.get(
+                    "stems", []), all_bar_features
+            )
+
+        with self._step("Step 9: Write Parquet datasets"):
+            self._write_parquet_outputs(
+                events_df, beats_df, bars_df, bar_features_df, results
+            )
+
+        with self._step("Step 10: Export reports"):
+            self._export_reports(all_notes, results)
+
+        with self._step("Step 11: Write summary JSON"):
+            summary_path = self._write_summary(
+                results, beat_times, bar_boundaries, all_notes
+            )
+        results["summary_json"] = str(summary_path)
+
+        self.logger.info("Pipeline completed successfully for %s", cfg.song_id)
+
+        return results
+
+    def _step(self, name: str) -> _PipelineStep:
+        """Return a context manager that logs the lifecycle of a pipeline step."""
+        return _PipelineStep(self.logger, name)
+
+    def _emit_environment_warnings(self) -> None:
+        """Emit warnings for common environment/performance footguns.
+
+        This is intentionally best-effort and avoids importing heavy optional
+        dependencies.
+        """
+        cfg = self.cfg
+
+        # WSL detection: kernel release commonly contains 'microsoft'.
+        is_wsl = False
+        if platform.system().lower() == "linux":
+            try:
+                release = Path("/proc/sys/kernel/osrelease").read_text(
+                    encoding="utf-8"
+                ).lower()
+                is_wsl = "microsoft" in release
+            except Exception:
+                is_wsl = False
+
+        if is_wsl:
+            out_str = str(cfg.out_dir)
+            if out_str.startswith("/mnt/") and cfg.write_bar_chunks and cfg.write_bar_chunk_wavs:
+                self.logger.warning(
+                    "WSL detected and output directory is on a Windows-mounted path (%s). "
+                    "Writing many chunk WAVs can be very slow here. Consider using --no-chunk-wavs "
+                    "or writing outputs under the WSL filesystem (e.g., /home/<user>/...).",
+                    out_str,
+                )
+
+    def _copy_input(self) -> Path:
+        """Copy the original input file into the output directory."""
+        input_copy_path = self.cfg.input_dir / self.cfg.input_wav.name
+        shutil.copy2(self.cfg.input_wav, input_copy_path)
+        self.logger.debug("Copied input to %s", input_copy_path)
+        return input_copy_path
+
+    def _ingest_audio(self) -> Tuple[Any, int]:
+        """Load and validate the input WAV file."""
+        audio, sr = self.ingester.load(self.cfg.input_wav)
 
         if not self.ingester.validate(audio, sr):
             raise ValueError("Invalid audio data")
 
-        results["sample_rate"] = sr
-        results["duration_s"] = float(len(audio) / sr)
-        print(f"  Loaded audio: duration={results['duration_s']:.2f}s, sr={sr}")
+        self.logger.info(
+            "Loaded audio: duration=%.2fs, sr=%s",
+            len(audio) / sr,
+            sr,
+        )
+        return audio, sr
 
-        # Step 3: Preprocess audio (optional)
-        if cfg.use_pydub_preprocess:
-            print("Step 3: Preprocessing audio...")
-            audio, sr = self.preprocessor.preprocess(audio, sr, cfg)
-            preprocessed_path = cfg.preprocess_dir / f"{cfg.song_id}.wav"
-            self.ingester.save(audio, sr, preprocessed_path)
-            results["preprocessed_path"] = str(preprocessed_path)
-            print(f"  Saved preprocessed audio to: {preprocessed_path}")
-        else:
-            print("Step 3: Skipping preprocessing...")
+    def _maybe_preprocess(self, audio: Any, sr: int) -> Tuple[Any, int, Optional[Path]]:
+        """Optionally preprocess audio and persist the preprocessed file."""
+        if not self.cfg.use_pydub_preprocess:
+            self.logger.info("Skipping preprocessing step per configuration")
+            return audio, sr, None
 
-        # Step 4: Analyze audio
-        print("Step 4: Analyzing audio...")
+        audio, sr = self.preprocessor.preprocess(audio, sr, self.cfg)
+        preprocessed_path = self.cfg.preprocess_dir / f"{self.cfg.song_id}.wav"
+        self.ingester.save(audio, sr, preprocessed_path)
+        self.logger.info("Saved preprocessed audio to %s", preprocessed_path)
+        return audio, sr, preprocessed_path
+
+    def _analyze_audio(
+        self,
+        audio: Any,
+        sr: int,
+        duration_s: float,
+    ) -> Tuple[Dict[str, Any], float, List[float]]:
+        """Run audio analysis and return analysis results."""
         analysis = self.analyzer.analyze(audio, sr)
-        results["analysis"] = {
-            "tempo_bpm": analysis.get("tempo", analysis.get("librosa", {}).get("tempo_bpm", 120.0)),
-            "num_beats": len(analysis.get("beat_times", [])),
-            "duration_s": results["duration_s"],
-            "essentia_available": analysis.get("essentia", {}).get("available", False),
-        }
-        tempo_bpm = results["analysis"]["tempo_bpm"]
+        tempo_bpm = analysis.get("tempo", analysis.get(
+            "librosa", {}).get("tempo_bpm", 120.0))
         beat_times = analysis.get("beat_times", [])
-        print(f"  Detected tempo: {tempo_bpm:.2f} BPM")
-        print(f"  Found {len(beat_times)} beats")
+        self.logger.info(
+            "Detected tempo %.2f BPM with %d beats (duration %.2fs)",
+            tempo_bpm,
+            len(beat_times),
+            duration_s,
+        )
 
-        # Step 5: Separate stems (check if Demucs available)
-        print("Step 5: Checking stem separation...")
-        stem_paths: Dict[str, Path] = {}
+        if analysis.get("essentia", {}).get("available", False):
+            self.logger.info("Essentia features available for this run")
+
+        return analysis, tempo_bpm, beat_times
+
+    def _separate_stems(self) -> Tuple[Dict[str, Path], Optional[str]]:
+        """Attempt Demucs stem separation, falling back gracefully when unavailable."""
         try:
             from didactic_engine.separation import StemSeparator
-            separator = StemSeparator(model=cfg.demucs_model)
-            stem_paths = separator.separate(cfg.input_wav, cfg.stems_dir)
-            results["stems"] = list(stem_paths.keys())
-            print(f"  Separated into {len(stem_paths)} stems: {list(stem_paths.keys())}")
-        except RuntimeError as e:
-            print(f"  Warning: Stem separation skipped: {e}")
-            # Use original audio as single "stem"
-            stem_paths = {"full_mix": cfg.input_wav}
-            results["stems"] = ["full_mix"]
-            results["stem_separation_error"] = str(e)
 
-        # Step 6: Compute bar boundaries
-        print("Step 6: Computing bar boundaries...")
-        beats_per_bar = cfg.time_signature_num * (4.0 / cfg.time_signature_den)
+            separator = StemSeparator(
+                model=self.cfg.demucs_model,
+                device=self.cfg.demucs_device,
+                timeout_s=self.cfg.demucs_timeout_s,
+            )
+            stem_paths = separator.separate(
+                self.cfg.input_wav, self.cfg.stems_dir)
+            self.logger.info(
+                "Separated into %d stems: %s",
+                len(stem_paths),
+                list(stem_paths.keys()),
+            )
+            return stem_paths, None
+        except RuntimeError as exc:
+            self.logger.warning("Stem separation skipped: %s", exc)
+            return {"full_mix": self.cfg.input_wav}, str(exc)
+
+    def _compute_bar_boundaries(
+        self,
+        beat_times: List[float],
+        tempo_bpm: float,
+        duration_s: float,
+    ) -> List[Tuple[int, float, float]]:
+        """Convert beat positions into bar boundaries."""
         bar_boundaries = segment_beats_into_bars(
-            beat_times, tempo_bpm,
-            cfg.time_signature_num, cfg.time_signature_den,
-            results["duration_s"]
+            beat_times,
+            tempo_bpm,
+            self.cfg.time_signature_num,
+            self.cfg.time_signature_den,
+            duration_s,
         )
-        results["num_bars"] = len(bar_boundaries)
-        print(f"  Computed {len(bar_boundaries)} bars")
+        beats_per_bar = self.cfg.time_signature_num * \
+            (4.0 / self.cfg.time_signature_den)
+        self.logger.info(
+            "Computed %d bars (beats_per_bar=%.2f)",
+            len(bar_boundaries),
+            beats_per_bar,
+        )
+        return bar_boundaries
 
-        # Step 7: Write per-bar chunks (optional)
+    def _process_stems(
+        self,
+        stem_paths: Dict[str, Path],
+        bar_boundaries: List[Tuple[int, float, float]],
+        beat_times: List[float],
+        tempo_bpm: float,
+    ) -> Tuple[pd.DataFrame, List[Dict[str, Any]], Dict[str, Any]]:
+        """Process each stem: optional chunking, MIDI transcription, and alignment."""
         all_notes_dfs: List[pd.DataFrame] = []
         all_bar_features: List[Dict[str, Any]] = []
+        results_updates: Dict[str, Any] = {}
 
         for stem_name, stem_path in stem_paths.items():
-            print(f"\nProcessing stem: {stem_name}")
-
-            # Load stem audio
+            self.logger.info("Processing stem '%s'", stem_name)
             stem_audio, stem_sr = self.ingester.load(stem_path)
+            self.logger.debug(
+                "Loaded stem '%s' (%d samples @ %d Hz)",
+                stem_name,
+                len(stem_audio),
+                stem_sr,
+            )
 
-            if cfg.write_bar_chunks:
-                print(f"  Writing bar chunks...")
-                stem_chunks_dir = cfg.chunks_dir / stem_name
+            # Load original audio if preserving chunk characteristics
+            stem_audio_original = None
+            stem_sr_original = None
+            if self.cfg.write_bar_chunks and self.cfg.write_bar_chunk_wavs and self.cfg.preserve_chunk_audio:
+                import soundfile as sf
+                # Load at native SR without downmixing or resampling
+                stem_audio_original, stem_sr_original = sf.read(str(stem_path))
+                # Ensure float32 for consistency
+                import numpy as np
+                stem_audio_original = stem_audio_original.astype(np.float32)
+                self.logger.debug(
+                    "Loaded original stem '%s' for chunk preservation (%d samples @ %d Hz, %d channels)",
+                    stem_name,
+                    len(stem_audio_original) if stem_audio_original.ndim == 1 else stem_audio_original.shape[0],
+                    stem_sr_original,
+                    1 if stem_audio_original.ndim == 1 else stem_audio_original.shape[1],
+                )
+
+            if self.cfg.write_bar_chunks:
+                stem_chunks_dir = self.cfg.chunks_dir / stem_name
                 stem_chunks_dir.mkdir(parents=True, exist_ok=True)
+                if self.cfg.write_bar_chunk_wavs:
+                    mode_str = "original audio" if self.cfg.preserve_chunk_audio else "analysis audio (mono @ {}Hz)".format(stem_sr)
+                    self.logger.info(
+                        "Writing bar chunks to %s (%s)", stem_chunks_dir, mode_str)
+                else:
+                    self.logger.info(
+                        "Computing bar features without writing chunk WAVs (write_bar_chunk_wavs=False)"
+                    )
 
-                # Write chunks using pydub for millisecond precision
-                from pydub import AudioSegment
-                stem_segment = AudioSegment.from_file(str(stem_path))
+                # Performance note:
+                # We already have `stem_audio` in memory resampled to `stem_sr` (typically
+                # cfg.analysis_sr via WAVIngester). Avoid per-chunk decode + resample by:
+                #   1) slicing `stem_audio` directly
+                #   2) computing features from the slice
+                #   3) optionally writing the slice to disk for inspection/training
+                # When preserve_chunk_audio=True, we slice from stem_audio_original for WAV writing
+                # and from stem_audio for feature extraction.
+                import soundfile as sf
 
                 for bar_idx, start_s, end_s in bar_boundaries:
-                    start_ms = int(start_s * 1000)
-                    end_ms = int(end_s * 1000)
-                    chunk = stem_segment[start_ms:end_ms]
-                    chunk_path = stem_chunks_dir / f"bar_{bar_idx:04d}.wav"
-                    chunk.export(str(chunk_path), format="wav")
+                    start_sample = max(0, int(round(start_s * stem_sr)))
+                    end_sample = min(len(stem_audio), int(
+                        round(end_s * stem_sr)))
 
-                    # Extract features for this bar
-                    features = self.feature_extractor.extract_bar_features_from_file(
-                        chunk_path, cfg.analysis_sr
+                    # Skip empty/invalid segments (can occur due to rounding/clamping)
+                    if end_sample <= start_sample:
+                        continue
+
+                    chunk_audio = stem_audio[start_sample:end_sample]
+                    # Keep storage small and consistent
+                    try:
+                        import numpy as np
+
+                        if isinstance(chunk_audio, np.ndarray) and chunk_audio.dtype != np.float32:
+                            chunk_audio = chunk_audio.astype(
+                                np.float32, copy=False)
+                    except Exception:
+                        # If numpy isn't available or casting fails, proceed with original.
+                        pass
+
+                    chunk_path: Optional[Path] = None
+                    if self.cfg.write_bar_chunk_wavs:
+                        chunk_path = stem_chunks_dir / f"bar_{bar_idx:04d}.wav"
+
+                        # Use original audio for chunks if preserve_chunk_audio is enabled
+                        if self.cfg.preserve_chunk_audio and stem_audio_original is not None:
+                            start_sample_orig = max(0, int(round(start_s * stem_sr_original)))
+                            end_sample_orig = min(
+                                len(stem_audio_original) if stem_audio_original.ndim == 1 else stem_audio_original.shape[0],
+                                int(round(end_s * stem_sr_original))
+                            )
+                            if stem_audio_original.ndim == 1:
+                                chunk_audio_to_write = stem_audio_original[start_sample_orig:end_sample_orig]
+                            else:
+                                chunk_audio_to_write = stem_audio_original[start_sample_orig:end_sample_orig, :]
+                            sf.write(str(chunk_path), chunk_audio_to_write, stem_sr_original)
+                        else:
+                            sf.write(str(chunk_path), chunk_audio, stem_sr)
+
+                    # Feature extraction directly from the chunk audio avoids expensive
+                    # per-file resampling (librosa/soxr) during large runs.
+                    features = self.feature_extractor.extract_bar_features_from_audio(
+                        chunk_audio, stem_sr
                     )
                     features.update({
-                        "song_id": cfg.song_id,
+                        "song_id": self.cfg.song_id,
                         "stem": stem_name,
                         "bar_index": bar_idx,
                         "start_s": start_s,
                         "end_s": end_s,
                         "duration_s": end_s - start_s,
                         "tempo_bpm": tempo_bpm,
-                        "chunk_path": str(chunk_path),
+                        "chunk_path": str(chunk_path) if chunk_path is not None else "",
                     })
                     all_bar_features.append(features)
+            else:
+                self.logger.info(
+                    "Bar chunking disabled; skipping chunk export for '%s'", stem_name)
 
-            # Step 8: Transcribe to MIDI (check if Basic Pitch available)
-            print(f"  Transcribing to MIDI...")
             try:
                 from didactic_engine.transcription import BasicPitchTranscriber
-                transcriber = BasicPitchTranscriber()
-                midi_path = transcriber.transcribe(stem_path, cfg.midi_dir)
-                results[f"midi_{stem_name}"] = str(midi_path)
-                print(f"    Saved MIDI to: {midi_path}")
 
-                # Step 9: Parse MIDI
-                print(f"  Parsing MIDI...")
+                transcriber = BasicPitchTranscriber(
+                    model_serialization=self.cfg.basic_pitch_backend,
+                    timeout_s=self.cfg.basic_pitch_timeout_s,
+                )
+                midi_path = transcriber.transcribe(
+                    stem_path, self.cfg.midi_dir
+                )
+                results_updates[f"midi_{stem_name}"] = str(midi_path)
+                self.logger.info(
+                    "Transcribed %s to MIDI at %s", stem_name, midi_path
+                )
+
                 midi_data = self.midi_parser.parse(midi_path)
                 notes_df = midi_data["notes_df"]
 
                 if not notes_df.empty:
-                    # Step 10: Align notes to beats
-                    print(f"  Aligning notes to beats...")
                     aligned_df = align_notes_to_beats(
-                        notes_df, beat_times, tempo_bpm,
-                        cfg.time_signature_num, cfg.time_signature_den
+                        notes_df,
+                        beat_times,
+                        tempo_bpm,
+                        self.cfg.time_signature_num,
+                        self.cfg.time_signature_den,
                     )
-                    aligned_df["song_id"] = cfg.song_id
+                    aligned_df["song_id"] = self.cfg.song_id
                     aligned_df["stem"] = stem_name
                     all_notes_dfs.append(aligned_df)
-                    print(f"    Aligned {len(aligned_df)} notes")
+                    self.logger.info(
+                        "Aligned %d notes for stem '%s'",
+                        len(aligned_df),
+                        stem_name,
+                    )
+                else:
+                    self.logger.info(
+                        "No notes detected for stem '%s'", stem_name)
 
-            except RuntimeError as e:
-                print(f"    Warning: MIDI transcription skipped: {e}")
-                results[f"transcription_error_{stem_name}"] = str(e)
+            except RuntimeError as exc:
+                message = str(exc)
+                results_updates[f"transcription_error_{stem_name}"] = message
+                self.logger.warning(
+                    "MIDI transcription skipped for stem '%s': %s",
+                    stem_name,
+                    message,
+                )
 
-        # Concatenate all aligned notes
-        if all_notes_dfs:
-            all_notes = pd.concat(all_notes_dfs, ignore_index=True)
-        else:
-            all_notes = pd.DataFrame()
+        all_notes = pd.concat(
+            all_notes_dfs, ignore_index=True) if all_notes_dfs else pd.DataFrame()
+        return all_notes, all_bar_features, results_updates
 
-        # Step 11: Build datasets
-        print("\nStep 11: Building datasets...")
-
-        # Events dataset
+    def _build_datasets(
+        self,
+        all_notes: pd.DataFrame,
+        beat_times: List[float],
+        tempo_bpm: float,
+        stems: List[str],
+        all_bar_features: List[Dict[str, Any]],
+    ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """Create pandas datasets from aligned notes, beats, and bar features."""
         events_df = self.feature_extractor.extract_events(all_notes)
 
-        # Beats dataset
         beats_rows = []
-        for stem in results.get("stems", []):
+        for stem in stems:
             beats_df = self.feature_extractor.extract_beats(
-                beat_times, tempo_bpm, stem, cfg.song_id
+                beat_times, tempo_bpm, stem, self.cfg.song_id
             )
             beats_rows.append(beats_df)
         beats_df = pd.concat(beats_rows, ignore_index=True) if beats_rows else pd.DataFrame()
 
-        # Bars dataset
-        bars_df = self.feature_extractor.extract_bars(all_notes, cfg.song_id)
-
-        # Bar features dataset
+        bars_df = self.feature_extractor.extract_bars(
+            all_notes, self.cfg.song_id)
         bar_features_df = pd.DataFrame(all_bar_features) if all_bar_features else pd.DataFrame()
 
-        # Step 12: Write Parquet datasets
-        print("Step 12: Writing Parquet datasets...")
+        self.logger.info(
+            "Dataset shapes - events: %d, beats: %d, bars: %d, bar_features: %d",
+            len(events_df),
+            len(beats_df),
+            len(bars_df),
+            len(bar_features_df),
+        )
+
+        return events_df, beats_df, bars_df, bar_features_df
+
+    def _write_parquet_outputs(
+        self,
+        events_df: pd.DataFrame,
+        beats_df: pd.DataFrame,
+        bars_df: pd.DataFrame,
+        bar_features_df: pd.DataFrame,
+        results: Dict[str, Any],
+    ) -> None:
+        """Persist generated datasets to Parquet files."""
+        cfg = self.cfg
         cfg.datasets_dir.mkdir(parents=True, exist_ok=True)
 
         if not events_df.empty:
             events_path = cfg.datasets_dir / "events.parquet"
             events_df.to_parquet(events_path, index=False)
             results["events_parquet"] = str(events_path)
-            print(f"  Wrote events.parquet ({len(events_df)} rows)")
+            self.logger.info(
+                "Wrote events dataset to %s (%d rows)", events_path, len(events_df))
 
         if not beats_df.empty:
             beats_path = cfg.datasets_dir / "beats.parquet"
             beats_df.to_parquet(beats_path, index=False)
             results["beats_parquet"] = str(beats_path)
-            print(f"  Wrote beats.parquet ({len(beats_df)} rows)")
+            self.logger.info(
+                "Wrote beats dataset to %s (%d rows)", beats_path, len(beats_df))
 
         if not bars_df.empty:
             bars_path = cfg.datasets_dir / "bars.parquet"
             bars_df.to_parquet(bars_path, index=False)
             results["bars_parquet"] = str(bars_path)
-            print(f"  Wrote bars.parquet ({len(bars_df)} rows)")
+            self.logger.info(
+                "Wrote bars dataset to %s (%d rows)", bars_path, len(bars_df))
 
         if not bar_features_df.empty:
             bar_features_path = cfg.datasets_dir / "bar_features.parquet"
             bar_features_df.to_parquet(bar_features_path, index=False)
             results["bar_features_parquet"] = str(bar_features_path)
-            print(f"  Wrote bar_features.parquet ({len(bar_features_df)} rows)")
+            self.logger.info(
+                "Wrote bar_features dataset to %s (%d rows)",
+                bar_features_path,
+                len(bar_features_df),
+            )
 
-        # Step 13: Export reports
-        print("Step 13: Exporting reports...")
+    def _export_reports(self, all_notes: pd.DataFrame, results: Dict[str, Any]) -> None:
+        """Export human-readable reports based on aligned notes and MIDI files."""
+        cfg = self.cfg
         cfg.reports_dir.mkdir(parents=True, exist_ok=True)
 
-        # Markdown report
         if not all_notes.empty:
             md_path = cfg.reports_dir / "midi_markdown.md"
             aligned_dict = {}
@@ -283,26 +578,33 @@ class AudioPipeline:
                 aligned_dict[bar_idx].append(row.to_dict())
             export_midi_markdown(aligned_dict, str(md_path), cfg.song_id)
             results["markdown_report"] = str(md_path)
-            print(f"  Wrote {md_path}")
+            self.logger.info("Wrote Markdown report to %s", md_path)
 
-        # ABC notation per stem
         for stem_name in results.get("stems", []):
             midi_key = f"midi_{stem_name}"
             if midi_key in results:
                 abc_path = cfg.reports_dir / f"{stem_name}.abc"
                 export_abc(results[midi_key], str(abc_path))
                 results[f"abc_{stem_name}"] = str(abc_path)
-                print(f"  Wrote {abc_path}")
+                self.logger.info(
+                    "Wrote ABC notation for '%s' to %s", stem_name, abc_path)
 
-        # Step 14: Write JSON summary
-        print("Step 14: Writing JSON summary...")
+    def _write_summary(
+        self,
+        results: Dict[str, Any],
+        beat_times: List[float],
+        bar_boundaries: List[Tuple[int, float, float]],
+        all_notes: pd.DataFrame,
+    ) -> Path:
+        """Write a JSON summary capturing core run metadata."""
+        cfg = self.cfg
         cfg.analysis_dir.mkdir(parents=True, exist_ok=True)
         summary_path = cfg.analysis_dir / "combined.json"
 
         summary = {
             "song_id": cfg.song_id,
-            "duration_s": results["duration_s"],
-            "tempo_bpm": tempo_bpm,
+            "duration_s": results.get("duration_s"),
+            "tempo_bpm": results["analysis"]["tempo_bpm"],
             "num_beats": len(beat_times),
             "num_bars": len(bar_boundaries),
             "stems": results.get("stems", []),
@@ -317,27 +619,26 @@ class AudioPipeline:
                     len(all_notes[all_notes["stem"] == stem])
                 )
 
-        # List generated files
         for key, value in results.items():
-            if key.endswith("_parquet") or key.endswith("_report") or key.startswith("abc_"):
+            if (
+                key.endswith(("_parquet", "_report"))
+                or key.startswith("abc_")
+                or key == "markdown_report"
+            ):
                 summary["files_generated"].append(value)
 
         with open(summary_path, "w") as f:
             json.dump(summary, f, indent=2)
-        results["summary_json"] = str(summary_path)
-        print(f"  Wrote {summary_path}")
 
-        print("\n" + "=" * 60)
-        print("Pipeline completed successfully!")
-        print("=" * 60)
-
-        return results
+        self.logger.info("Wrote summary to %s", summary_path)
+        return summary_path
 
     @staticmethod
     def process_batch(
         input_files: List[Path],
         out_dir: Path,
         song_ids: Optional[List[str]] = None,
+        logger: Optional[logging.Logger] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -348,6 +649,7 @@ class AudioPipeline:
             out_dir: Base output directory for all results.
             song_ids: Optional list of song IDs (one per file). If not provided,
                      filenames (without extension) are used as song IDs.
+            logger: Optional logger for emitting progress messages.
             **kwargs: Additional configuration parameters passed to PipelineConfig
                      (e.g., analysis_sr, use_essentia_features, etc.)
 
@@ -390,13 +692,20 @@ class AudioPipeline:
                 f"number of input_files ({len(input_files)})"
             )
         
+        log = logger or logging.getLogger(__name__)
         successful = []
         failed = []
         
-        print(f"Batch processing {len(input_files)} files...")
+        log.info("Batch processing %d files...", len(input_files))
         
         for idx, (input_file, song_id) in enumerate(zip(input_files, song_ids), 1):
-            print(f"\n[{idx}/{len(input_files)}] Processing: {input_file.name} ({song_id})")
+            log.info(
+                "[%d/%d] Processing: %s (song_id=%s)",
+                idx,
+                len(input_files),
+                input_file.name,
+                song_id,
+            )
             
             try:
                 # Validate file exists
@@ -412,25 +721,25 @@ class AudioPipeline:
                 )
                 
                 # Process the file
-                pipeline = AudioPipeline(cfg)
+                pipeline = AudioPipeline(cfg, logger=log)
                 result = pipeline.run()
                 
                 successful.append((song_id, str(input_file), result))
-                print(f"  ✓ Completed successfully")
+                log.info("  ✓ Completed successfully")
             
             except FileNotFoundError as e:
                 # Handle expected missing-file errors explicitly so tests and callers
                 # can distinguish them from other processing failures.
                 error_msg = f"File not found: {e}"
                 failed.append((song_id, str(input_file), error_msg))
-                print(f"  ✗ Failed (missing file): {error_msg}")
+                log.warning("  ✗ Failed (missing file): %s", error_msg)
             
             except Exception as e:
                 # Preserve batch robustness while keeping the exception type visible
                 # in the recorded error message for easier debugging and validation.
                 error_msg = f"{type(e).__name__}: {e}"
                 failed.append((song_id, str(input_file), error_msg))
-                print(f"  ✗ Failed: {error_msg}")
+                log.error("  ✗ Failed: %s", error_msg)
         
         # Return summary
         summary = {
@@ -440,23 +749,26 @@ class AudioPipeline:
             "success_count": len(successful),
             "failure_count": len(failed),
         }
-        
-        print("\n" + "=" * 60)
-        print(f"Batch processing complete: {summary['success_count']}/{summary['total']} successful")
-        print("=" * 60)
+
+        log.info(
+            "Batch processing complete: %d/%d successful",
+            summary["success_count"],
+            summary["total"],
+        )
         
         return summary
 
 
-def run_all(cfg: "PipelineConfig") -> Dict[str, Any]:
+def run_all(cfg: "PipelineConfig", logger: Optional[logging.Logger] = None) -> Dict[str, Any]:
     """
     Run the complete audio processing pipeline.
 
     Args:
         cfg: Pipeline configuration.
+        logger: Optional logger to use for the pipeline run.
 
     Returns:
         Dictionary containing all processing results.
     """
-    pipeline = AudioPipeline(cfg)
+    pipeline = AudioPipeline(cfg, logger=logger)
     return pipeline.run()

@@ -7,6 +7,7 @@ output directory paths.
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,7 @@ class PipelineConfig:
         input_wav: Path to the input WAV file.
         out_dir: Base output directory for all generated files.
         demucs_model: Demucs model name for stem separation.
+        demucs_device: Device for Demucs processing ('cpu', 'cuda', 'cuda:0', etc.).
         analysis_sr: Sample rate for audio analysis.
         hop_length: Hop length for STFT operations.
         time_signature_num: Time signature numerator (beats per bar).
@@ -35,12 +37,20 @@ class PipelineConfig:
         preprocess_keep_silence_ms: Milliseconds of silence to keep.
         use_essentia_features: Whether to extract Essentia features.
         write_bar_chunks: Whether to write per-bar audio chunks.
+        write_bar_chunk_wavs: Whether to persist bar chunk WAVs to disk.
+        preserve_chunk_audio: Whether to preserve original sample rate and channels
+            for chunk WAVs. When True, chunks are written at native SR/channels instead
+            of analysis_sr/mono. Features still use analysis_sr/mono. Default False.
+        basic_pitch_backend: Basic Pitch inference backend ('tf', 'onnx', 'tflite', 'coreml').
+        demucs_timeout_s: Optional timeout (seconds) for Demucs separation.
+        basic_pitch_timeout_s: Optional timeout (seconds) for Basic Pitch transcription.
     """
 
     song_id: str
     input_wav: Path
     out_dir: Path
     demucs_model: str = "htdemucs"
+    demucs_device: str = "cpu"
     analysis_sr: int = 22050
     hop_length: int = 512
     time_signature_num: int = 4
@@ -54,6 +64,11 @@ class PipelineConfig:
     preprocess_keep_silence_ms: int = 80
     use_essentia_features: bool = False
     write_bar_chunks: bool = True
+    write_bar_chunk_wavs: bool = True
+    preserve_chunk_audio: bool = False
+    basic_pitch_backend: str = "tf"
+    demucs_timeout_s: Optional[float] = None
+    basic_pitch_timeout_s: Optional[float] = None
 
     def __post_init__(self) -> None:
         """Convert string paths to Path objects if needed."""

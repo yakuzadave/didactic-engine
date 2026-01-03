@@ -31,6 +31,13 @@ didactic-engine --help
 | [03_DEBUGGING.md](03_DEBUGGING.md) | Troubleshooting and common issues |
 | [04_CONTRIBUTING.md](04_CONTRIBUTING.md) | How to contribute |
 | [05_GLOSSARY.md](05_GLOSSARY.md) | Domain terms and definitions |
+| [06_API_REFERENCE.md](06_API_REFERENCE.md) | API reference for modules/classes/functions |
+| [07_DESIGN_PATTERNS_AND_DECISIONS.md](07_DESIGN_PATTERNS_AND_DECISIONS.md) | Design patterns, anti-patterns, ADR-style decisions |
+| [07_DESIGN_PATTERNS.md](07_DESIGN_PATTERNS.md) | Catalog of design patterns used |
+| [08_ANTI_PATTERNS.md](08_ANTI_PATTERNS.md) | Risks, footguns, and mitigations |
+| [adr/README.md](adr/README.md) | Architecture Decision Records (ADR index) |
+| [knowledge_graph/README.md](knowledge_graph/README.md) | Generated knowledge graph artifacts + how to regenerate |
+| [09_DEPENDENCY_MAPS.md](09_DEPENDENCY_MAPS.md) | Visual module dependency maps + coupling hotspots |
 
 ---
 

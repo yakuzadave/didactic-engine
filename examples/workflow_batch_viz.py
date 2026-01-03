@@ -40,7 +40,7 @@ except ImportError:
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format="%(asctime)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
@@ -148,6 +148,34 @@ def batch_process(
     }
 
 
+def _read_bar_features_polars(output_dir: Path, song_ids: List[str]) -> Optional[pd.DataFrame]:
+    """Aggregate bar_features using Polars (lazy scan for speed)."""
+    if not POLARS_AVAILABLE or pl is None:
+        return None
+
+    lazy_frames = []
+    for song_id in song_ids:
+        dataset_path = output_dir / "datasets" / song_id / "bar_features.parquet"
+        if dataset_path.exists():
+            lazy_frames.append(
+                pl.scan_parquet(dataset_path).with_columns(pl.lit(song_id).alias("song_id"))
+            )
+        else:
+            logger.warning("Dataset not found for %s", song_id)
+
+    if not lazy_frames:
+        return None
+
+    combined = pl.concat(lazy_frames, how="diagonal")
+    collected = combined.collect()
+    logger.info(
+        "Aggregated %d bars from %d songs (polars, lazy scan)",
+        collected.height,
+        len(lazy_frames),
+    )
+    return collected.to_pandas()
+
+
 def aggregate_datasets(output_dir: Path, song_ids: List[str]) -> pd.DataFrame:
     """
     Aggregate bar_features datasets from multiple songs.
@@ -159,27 +187,9 @@ def aggregate_datasets(output_dir: Path, song_ids: List[str]) -> pd.DataFrame:
     Returns:
         Combined DataFrame with all bar features
     """
-    if POLARS_AVAILABLE:
-        assert pl is not None
-        frames = []
-        for song_id in song_ids:
-            dataset_path = output_dir / "datasets" / song_id / "bar_features.parquet"
-            if dataset_path.exists():
-                df = pl.read_parquet(dataset_path).with_columns(
-                    pl.lit(song_id).alias("song_id")
-                )
-                frames.append(df)
-            else:
-                logger.warning(f"Dataset not found for {song_id}")
-
-        if not frames:
-            return pd.DataFrame()
-
-        combined_pl = pl.concat(frames, how="vertical_relaxed")
-        logger.info(
-            f"Aggregated {combined_pl.height} bars from {len(frames)} songs (polars)"
-        )
-        return combined_pl.to_pandas()
+    polars_result = _read_bar_features_polars(output_dir, song_ids)
+    if polars_result is not None:
+        return polars_result
 
     dfs = []
     for song_id in song_ids:
@@ -217,11 +227,16 @@ def create_visualizations(
         import importlib
 
         go = importlib.import_module("plotly.graph_objects")
-        px = importlib.import_module("plotly.express")
         make_subplots = importlib.import_module("plotly.subplots").make_subplots
     except ImportError:
         logger.error("Plotly not installed. Install with: pip install plotly")
         return
+
+    template = "plotly_dark"
+    paper_bg = "#0b1021"
+    plot_bg = "#0f1629"
+    accent = "#4dd0e1"
+    accent_warn = "#ff7043"
     
     viz_dir = output_dir / "visualizations"
     viz_dir.mkdir(parents=True, exist_ok=True)
@@ -250,7 +265,7 @@ def create_visualizations(
         go.Pie(
             labels=['Success', 'Failed'],
             values=[batch_results['successful'], batch_results['failed']],
-            marker_colors=['#2ecc71', '#e74c3c'],
+            marker_colors=['#1abc9c', accent_warn],
         ),
         row=1, col=1
     )
@@ -259,7 +274,14 @@ def create_visualizations(
     tempos = [r['tempo'] for r in successful_results if 'tempo' in r]
     if tempos:
         fig1.add_trace(
-            go.Histogram(x=tempos, name='Tempo', nbinsx=20, marker_color='steelblue', showlegend=False),
+            go.Histogram(
+                x=tempos,
+                name='Tempo',
+                nbinsx=20,
+                marker_color=accent,
+                opacity=0.75,
+                showlegend=False,
+            ),
             row=1, col=2
         )
         fig1.update_xaxes(title_text="BPM", row=1, col=2)
@@ -268,7 +290,14 @@ def create_visualizations(
     durations = [r['duration'] for r in successful_results if 'duration' in r]
     if durations:
         fig1.add_trace(
-            go.Histogram(x=durations, name='Duration', nbinsx=20, marker_color='orange', showlegend=False),
+            go.Histogram(
+                x=durations,
+                name='Duration',
+                nbinsx=20,
+                marker_color='#fbc02d',
+                opacity=0.75,
+                showlegend=False,
+            ),
             row=2, col=1
         )
         fig1.update_xaxes(title_text="Seconds", row=2, col=1)
@@ -278,13 +307,24 @@ def create_visualizations(
     num_bars = [r['num_bars'] for r in successful_results if 'num_bars' in r]
     if song_ids and num_bars:
         fig1.add_trace(
-            go.Bar(x=song_ids, y=num_bars, marker_color='lightgreen', showlegend=False),
+            go.Bar(
+                x=song_ids,
+                y=num_bars,
+                marker_color='#9ccc65',
+                showlegend=False,
+            ),
             row=2, col=2
         )
         fig1.update_xaxes(title_text="Song", row=2, col=2)
         fig1.update_yaxes(title_text="Bars", row=2, col=2)
     
-    fig1.update_layout(title="Batch Processing Summary", height=800, template='plotly_white')
+    fig1.update_layout(
+        title="Batch Processing Summary",
+        height=800,
+        template=template,
+        paper_bgcolor=paper_bg,
+        plot_bgcolor=plot_bg,
+    )
     fig1.write_html(viz_dir / "batch_summary.html")
     logger.info(f"✓ Batch summary: {viz_dir / 'batch_summary.html'}")
     
@@ -327,7 +367,9 @@ def create_visualizations(
             fig2.update_layout(
                 title="Feature Distributions Across Songs",
                 height=900,
-                template='plotly_white',
+                template=template,
+                paper_bgcolor=paper_bg,
+                plot_bgcolor=plot_bg,
             )
             fig2.write_html(viz_dir / "feature_comparisons.html")
             logger.info(f"✓ Feature comparisons: {viz_dir / 'feature_comparisons.html'}")
@@ -340,7 +382,7 @@ def create_visualizations(
                     z=corr_matrix.values,
                     x=corr_matrix.columns,
                     y=corr_matrix.index,
-                    colorscale='RdBu',
+                    colorscale='RdBu_r',
                     zmid=0,
                     text=corr_matrix.values.round(2),
                     texttemplate='%{text}',
@@ -350,7 +392,9 @@ def create_visualizations(
                 fig3.update_layout(
                     title="Feature Correlation Matrix",
                     height=600,
-                    template='plotly_white',
+                    template=template,
+                    paper_bgcolor=paper_bg,
+                    plot_bgcolor=plot_bg,
                 )
                 fig3.write_html(viz_dir / "feature_correlations.html")
                 logger.info(f"✓ Feature correlations: {viz_dir / 'feature_correlations.html'}")
