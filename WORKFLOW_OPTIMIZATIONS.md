@@ -358,6 +358,11 @@ def _process_stems_parallel(
             if bar_features:
                 all_bar_features.extend(bar_features)
             results_updates.update(errors)
+        
+        if all_notes_dfs:
+            all_notes = pd.concat(all_notes_dfs, ignore_index=True)
+        else:
+            all_notes = pd.DataFrame()
     
     return all_notes, all_bar_features, results_updates
 ```
