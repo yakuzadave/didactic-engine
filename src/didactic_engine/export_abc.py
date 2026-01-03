@@ -8,6 +8,7 @@ music in a simple, human-readable format.
 Key Functions:
     - :func:`export_abc`: Convert MIDI file to ABC notation
     - :func:`export_abc_from_notes`: Convert note list to ABC notation
+    - :func:`export_abc_text`: Convert MIDI file to ABC text string
 
 Prerequisites:
     music21 must be installed for ABC export to work::
@@ -19,7 +20,8 @@ Prerequisites:
 
 Integration:
     ABC export is typically the final step for generating human-readable
-    notation from transcribed MIDI files.
+    notation from transcribed MIDI files. For better results, quantize
+    MIDI notes before exporting (see :mod:`didactic_engine.midi_quantizer`).
 
 Example:
     >>> success = export_abc("vocals.mid", "vocals.abc", title="Vocal Line")
@@ -34,10 +36,12 @@ Limitations:
 See Also:
     - :mod:`didactic_engine.export_md` for Markdown reports
     - :mod:`didactic_engine.transcription` for MIDI generation
+    - :mod:`didactic_engine.midi_quantizer` for note quantization before export
 """
 
 import os
 from typing import Optional
+from pathlib import Path
 
 try:
     import music21
@@ -77,6 +81,7 @@ def export_abc(
         returns False in this case.
 
     See Also:
+        - :func:`export_abc_text` for getting ABC as a string
         - :func:`export_abc_from_notes` for note-list input
     """
     if not MUSIC21_AVAILABLE:
@@ -108,6 +113,58 @@ def export_abc(
         print(f"Warning: ABC export failed for {midi_path}: {e}")
         _write_error_file(output_path, str(e))
         return False
+
+
+def export_abc_text(
+    midi_path: str,
+    title: Optional[str] = None,
+) -> Optional[str]:
+    """Export MIDI file to ABC notation as a text string.
+
+    Converts a MIDI file to ABC notation and returns it as a string
+    instead of writing to a file.
+
+    Args:
+        midi_path: Path to input MIDI file.
+        title: Optional title for the ABC notation.
+
+    Returns:
+        ABC notation text as a string, or None if export failed.
+
+    Example:
+        >>> abc_text = export_abc_text("vocals.mid", title="Vocal Line")
+        >>> if abc_text:
+        ...     print(abc_text[:100])  # Print first 100 chars
+
+    Note:
+        This function uses music21's ABC writer and extracts the text
+        content without writing to a file.
+
+    See Also:
+        - :func:`export_abc` for writing to a file
+    """
+    if not MUSIC21_AVAILABLE:
+        print("Warning: music21 is not installed. ABC export skipped.")
+        return None
+
+    try:
+        # Parse MIDI file
+        score = music21.converter.parse(midi_path)
+
+        # Set title if provided
+        if title:
+            score.metadata = music21.metadata.Metadata()
+            score.metadata.title = title
+
+        # Convert to ABC text
+        # music21's ABC writer returns a string when fp is None
+        abc_text = score.write("abc")
+
+        return abc_text
+
+    except Exception as e:
+        print(f"Warning: ABC export to text failed for {midi_path}: {e}")
+        return None
 
 
 def export_abc_from_notes(
