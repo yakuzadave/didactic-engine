@@ -22,7 +22,9 @@ from didactic_engine.segmentation import segment_beats_into_bars, StemSegmenter
 from didactic_engine.features import FeatureExtractor
 from didactic_engine.align import align_notes_to_beats
 from didactic_engine.export_md import export_midi_markdown
-from didactic_engine.export_abc import export_abc
+from didactic_engine.export_abc import export_abc, export_abc_text
+from didactic_engine.midi_quantizer import quantize_midi_file
+from didactic_engine.metadata_export import create_metadata_entry, export_metadata_jsonl
 
 if TYPE_CHECKING:
     from didactic_engine.config import PipelineConfig
@@ -175,6 +177,11 @@ class AudioPipeline:
                 results, beat_times, bar_boundaries, all_notes
             )
         results["summary_json"] = str(summary_path)
+
+        # Optional: Export metadata.jsonl for HuggingFace AudioFolder
+        if self.cfg.export_metadata_jsonl:
+            with self._step("Step 12: Export metadata.jsonl"):
+                self._export_metadata_jsonl(results, bar_boundaries, tempo_bpm)
 
         self.logger.info("Pipeline completed successfully for %s", cfg.song_id)
 
@@ -451,6 +458,29 @@ class AudioPipeline:
                     "Transcribed %s to MIDI at %s", stem_name, midi_path
                 )
 
+                # Optionally quantize MIDI for cleaner ABC notation
+                if self.cfg.quantize_midi:
+                    quantized_midi_path = self.cfg.midi_dir / f"{stem_name}_quantized.mid"
+                    success = quantize_midi_file(
+                        midi_path,
+                        quantized_midi_path,
+                        tempo_bpm=tempo_bpm,
+                        division=self.cfg.quantize_division,
+                    )
+                    if success:
+                        # Use quantized MIDI for ABC export
+                        results_updates[f"midi_quantized_{stem_name}"] = str(quantized_midi_path)
+                        self.logger.info(
+                            "Quantized MIDI for %s (division=%d) at %s",
+                            stem_name,
+                            self.cfg.quantize_division,
+                            quantized_midi_path,
+                        )
+                    else:
+                        self.logger.warning(
+                            "MIDI quantization failed for %s, using original", stem_name
+                        )
+
                 midi_data = self.midi_parser.parse(midi_path)
                 notes_df = midi_data["notes_df"]
 
@@ -581,13 +611,29 @@ class AudioPipeline:
             self.logger.info("Wrote Markdown report to %s", md_path)
 
         for stem_name in results.get("stems", []):
+            # Prefer quantized MIDI if available for ABC export
+            midi_quantized_key = f"midi_quantized_{stem_name}"
             midi_key = f"midi_{stem_name}"
-            if midi_key in results:
-                abc_path = cfg.reports_dir / f"{stem_name}.abc"
-                export_abc(results[midi_key], str(abc_path))
-                results[f"abc_{stem_name}"] = str(abc_path)
-                self.logger.info(
-                    "Wrote ABC notation for '%s' to %s", stem_name, abc_path)
+            
+            if midi_quantized_key in results:
+                midi_path_for_abc = results[midi_quantized_key]
+                self.logger.debug("Using quantized MIDI for ABC export: %s", stem_name)
+            elif midi_key in results:
+                midi_path_for_abc = results[midi_key]
+            else:
+                continue
+            
+            abc_path = cfg.reports_dir / f"{stem_name}.abc"
+            export_abc(midi_path_for_abc, str(abc_path))
+            results[f"abc_{stem_name}"] = str(abc_path)
+            
+            # Also export ABC as text for metadata
+            abc_text = export_abc_text(midi_path_for_abc)
+            if abc_text:
+                results[f"abc_text_{stem_name}"] = abc_text
+            
+            self.logger.info(
+                "Wrote ABC notation for '%s' to %s", stem_name, abc_path)
 
     def _write_summary(
         self,
@@ -632,6 +678,113 @@ class AudioPipeline:
 
         self.logger.info("Wrote summary to %s", summary_path)
         return summary_path
+
+    def _export_metadata_jsonl(
+        self,
+        results: Dict[str, Any],
+        bar_boundaries: List[Tuple[int, float, float]],
+        tempo_bpm: float,
+    ) -> None:
+        """Export metadata.jsonl for HuggingFace AudioFolder dataset."""
+        cfg = self.cfg
+        
+        # Create metadata directory
+        metadata_dir = cfg.datasets_dir
+        metadata_dir.mkdir(parents=True, exist_ok=True)
+        metadata_path = metadata_dir / "metadata.jsonl"
+        
+        # Collect metadata entries
+        entries: List[Dict[str, Any]] = []
+        
+        # Get ABC texts for each stem
+        abc_texts = {}
+        for stem_name in results.get("stems", []):
+            abc_text_key = f"abc_text_{stem_name}"
+            if abc_text_key in results:
+                abc_texts[stem_name] = results[abc_text_key]
+        
+        # If we have bar chunks with features, create entries for each
+        bar_features_path = results.get("bar_features_parquet")
+        if bar_features_path and Path(bar_features_path).exists():
+            bar_features_df = pd.read_parquet(bar_features_path)
+            
+            for _, row in bar_features_df.iterrows():
+                stem_name = row.get("stem", "")
+                bar_index = int(row.get("bar_index", 0))
+                chunk_path = row.get("chunk_path", "")
+                
+                # Skip if no chunk path (write_bar_chunk_wavs=False)
+                if not chunk_path or not Path(chunk_path).exists():
+                    continue
+                
+                # Get ABC text for this stem
+                abc_text = abc_texts.get(stem_name, "NA")
+                
+                # Make chunk path relative to metadata file
+                chunk_path_abs = Path(chunk_path)
+                try:
+                    # Try to make it relative to datasets_dir
+                    file_name = chunk_path_abs.relative_to(cfg.out_dir).as_posix()
+                except ValueError:
+                    # If not relative, use absolute path
+                    file_name = chunk_path_abs.as_posix()
+                
+                # Create metadata entry
+                entry = create_metadata_entry(
+                    file_name=file_name,
+                    abc_text=abc_text,
+                    source_track=cfg.input_wav.name,
+                    stem_used=stem_name,
+                    start_sec=float(row.get("start_s", 0.0)),
+                    end_sec=float(row.get("end_s", 0.0)),
+                    tempo_bpm=tempo_bpm,
+                    sample_rate=cfg.analysis_sr,
+                    trigger_token=cfg.abc_trigger_token,
+                    extra_fields={
+                        "bar_index": bar_index,
+                        "rms_energy": float(row.get("rms_energy", 0.0)),
+                    },
+                )
+                entries.append(entry)
+        
+        # If no bar features, create one entry per stem
+        if not entries:
+            for stem_name in results.get("stems", []):
+                abc_text = abc_texts.get(stem_name, "NA")
+                stem_path_key = f"midi_{stem_name}"
+                
+                if stem_path_key in results:
+                    # Use stem audio file as the audio reference
+                    stem_path = Path(results[stem_path_key]).parent.parent / "stems" / cfg.song_id / f"{stem_name}.wav"
+                    if stem_path.exists():
+                        try:
+                            file_name = stem_path.relative_to(cfg.out_dir).as_posix()
+                        except ValueError:
+                            file_name = stem_path.as_posix()
+                        
+                        entry = create_metadata_entry(
+                            file_name=file_name,
+                            abc_text=abc_text,
+                            source_track=cfg.input_wav.name,
+                            stem_used=stem_name,
+                            tempo_bpm=tempo_bpm,
+                            sample_rate=cfg.analysis_sr,
+                            trigger_token=cfg.abc_trigger_token,
+                        )
+                        entries.append(entry)
+        
+        # Export to JSONL
+        if entries:
+            count = export_metadata_jsonl(entries, metadata_path)
+            results["metadata_jsonl"] = str(metadata_path)
+            results["metadata_entry_count"] = count
+            self.logger.info(
+                "Wrote %d metadata entries to %s", count, metadata_path
+            )
+        else:
+            self.logger.warning(
+                "No metadata entries to export (no bar chunks or stems found)"
+            )
 
     @staticmethod
     def process_batch(
