@@ -309,6 +309,41 @@ class TestExportMD:
                 assert "Bar 0" in content
                 assert "Bar 1" in content
 
+    def test_export_midi_markdown_with_dataframe_columns(self):
+        """Test MIDI Markdown export with DataFrame-style column names (start_s/end_s)."""
+        from didactic_engine.export_md import export_midi_markdown
+
+        # Create test aligned notes using DataFrame column names
+        # This simulates what the pipeline actually produces
+        aligned_notes = {
+            0: [
+                {"start_s": 0.1, "end_s": 0.5, "pitch": 60, "velocity": 100},
+                {"start_s": 0.3, "end_s": 0.6, "pitch": 64, "velocity": 90},
+            ],
+            1: [
+                {"start_s": 1.0, "end_s": 1.5, "pitch": 67, "velocity": 80},
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = os.path.join(tmpdir, "test_report.md")
+            export_midi_markdown(aligned_notes, output_path, song_id="test_song")
+
+            assert os.path.exists(output_path)
+
+            # Check content includes non-zero time and duration values
+            with open(output_path, "r") as f:
+                content = f.read()
+                assert "MIDI Analysis Report" in content
+                assert "test_song" in content
+                assert "Bar 0" in content
+                assert "Bar 1" in content
+                # Verify time values are not all 0.000
+                assert "0.100" in content  # start_s of first note
+                assert "0.400" in content  # duration of first note (0.5 - 0.1)
+                # Ensure we're not getting 0.000 for everything
+                assert content.count("0.000") < 10  # Some 0.000 is OK but not all values
+
     def test_pitch_to_name(self):
         """Test pitch to note name conversion."""
         from didactic_engine.export_md import pitch_to_name
