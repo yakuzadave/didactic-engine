@@ -18,7 +18,7 @@
 - Markdown exporter was looking for: `start`, `end`
 - When keys not found, defaulted to 0
 
-**Fix Applied**: Updated `src/didactic_engine/export_md.py` line 127-128
+**Fix Applied**: Updated `src/didactic_engine/export_md.py` lines 129-131
 ```python
 # Before: Only checked for 'start' and 'end'
 start_time = note.get("start", note.get("original_start", 0))
