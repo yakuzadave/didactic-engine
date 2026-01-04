@@ -96,6 +96,35 @@ Created tracking infrastructure and developer documentation framework.
 
 ## Changelog
 
+### 2026-01-02 (API Reference)
+- Added `docs/06_API_REFERENCE.md` (module-by-module API reference)
+- Linked from `docs/00_README_DEV.md`
+- Updated tracking files: `TASKS.md`, `STATUS.md`, `DOC_INVENTORY.md`
+
+### 2026-01-02 (Patterns & Decisions)
+- Added `docs/07_DESIGN_PATTERNS_AND_DECISIONS.md` (design patterns, anti-patterns, ADR-style decisions)
+- Linked from `docs/00_README_DEV.md`
+- Updated tracking files: `TASKS.md`, `STATUS.md`, `DOC_INVENTORY.md`
+
+### 2026-01-02 (Split Patterns/ADRs)
+- Split the combined patterns/decisions content into multiple referenceable files:
+	- `docs/07_DESIGN_PATTERNS.md`
+	- `docs/08_ANTI_PATTERNS.md`
+	- `docs/adr/README.md` + ADRs 0001-0005
+- Converted `docs/07_DESIGN_PATTERNS_AND_DECISIONS.md` into an index page
+
+### 2026-01-02 (ADR 0006)
+- Added ADR: `docs/adr/0006-consolidate-chunking.md`
+- Linked from `docs/08_ANTI_PATTERNS.md`
+
+### 2026-01-02 (Knowledge Graph)
+- Added a standard-library graph builder: `tools/knowledge_graph/build_knowledge_graph.py`
+- Added `docs/knowledge_graph/README.md` with schema + regeneration instructions
+
+### 2026-01-02 (Dependency Maps)
+- Generated Mermaid module dependency maps and coupling hotspot tables in `docs/09_DEPENDENCY_MAPS.md`
+- Added renderer: `tools/knowledge_graph/render_dependency_maps.py`
+
 ### 2026-01-02 (Session 2, Batch 2)
 - Enhanced segmentation.py, bar_chunker.py, midi_parser.py
 - Enhanced export_md.py, export_abc.py

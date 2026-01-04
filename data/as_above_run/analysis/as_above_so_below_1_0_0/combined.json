@@ -1,0 +1,30 @@
+{
+  "song_id": "as_above_so_below_1_0_0",
+  "duration_s": 479.96,
+  "tempo_bpm": 151.99908088235293,
+  "num_beats": 1043,
+  "num_bars": 266,
+  "stems": [
+    "bass",
+    "drums",
+    "other",
+    "vocals"
+  ],
+  "num_notes_per_stem": {
+    "bass": 622,
+    "drums": 257,
+    "other": 2486,
+    "vocals": 1031
+  },
+  "essentia_used": true,
+  "files_generated": [
+    "/mnt/d/I_Drive_Backup/Projects/audio_projects/didactic-engine/data/as_above_run/datasets/as_above_so_below_1_0_0/events.parquet",
+    "/mnt/d/I_Drive_Backup/Projects/audio_projects/didactic-engine/data/as_above_run/datasets/as_above_so_below_1_0_0/beats.parquet",
+    "/mnt/d/I_Drive_Backup/Projects/audio_projects/didactic-engine/data/as_above_run/datasets/as_above_so_below_1_0_0/bars.parquet",
+    "/mnt/d/I_Drive_Backup/Projects/audio_projects/didactic-engine/data/as_above_run/reports/as_above_so_below_1_0_0/midi_markdown.md",
+    "/mnt/d/I_Drive_Backup/Projects/audio_projects/didactic-engine/data/as_above_run/reports/as_above_so_below_1_0_0/bass.abc",
+    "/mnt/d/I_Drive_Backup/Projects/audio_projects/didactic-engine/data/as_above_run/reports/as_above_so_below_1_0_0/drums.abc",
+    "/mnt/d/I_Drive_Backup/Projects/audio_projects/didactic-engine/data/as_above_run/reports/as_above_so_below_1_0_0/other.abc",
+    "/mnt/d/I_Drive_Backup/Projects/audio_projects/didactic-engine/data/as_above_run/reports/as_above_so_below_1_0_0/vocals.abc"
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "song_id": "sample",
+  "duration_s": 4.0,
+  "tempo_bpm": 0.0,
+  "num_beats": 0,
+  "num_bars": 0,
+  "stems": [
+    "bass",
+    "drums",
+    "other",
+    "vocals"
+  ],
+  "num_notes_per_stem": {
+    "bass": 3,
+    "drums": 2,
+    "other": 4,
+    "vocals": 22
+  },
+  "essentia_used": true,
+  "files_generated": [
+    "/mnt/d/I_Drive_Backup/Projects/audio_projects/didactic-engine/data/sample_run/datasets/sample/events.parquet",
+    "/mnt/d/I_Drive_Backup/Projects/audio_projects/didactic-engine/data/sample_run/datasets/sample/bars.parquet",
+    "/mnt/d/I_Drive_Backup/Projects/audio_projects/didactic-engine/data/sample_run/reports/sample/midi_markdown.md",
+    "/mnt/d/I_Drive_Backup/Projects/audio_projects/didactic-engine/data/sample_run/reports/sample/bass.abc",
+    "/mnt/d/I_Drive_Backup/Projects/audio_projects/didactic-engine/data/sample_run/reports/sample/drums.abc",
+    "/mnt/d/I_Drive_Backup/Projects/audio_projects/didactic-engine/data/sample_run/reports/sample/other.abc",
+    "/mnt/d/I_Drive_Backup/Projects/audio_projects/didactic-engine/data/sample_run/reports/sample/vocals.abc"
+  ]
+}
