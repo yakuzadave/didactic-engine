@@ -201,7 +201,8 @@ class AudioAnalyzer:
 
         # Tempo and beat tracking
         tempo, beat_frames = librosa.beat.beat_track(y=audio, sr=sample_rate)
-        features["tempo_bpm"] = float(tempo)
+        # Extract scalar from numpy array to avoid deprecation warning
+        features["tempo_bpm"] = float(tempo.item() if hasattr(tempo, 'item') else tempo)
         features["beat_frames"] = beat_frames.tolist()
         features["beat_times"] = librosa.frames_to_time(
             beat_frames, sr=sample_rate

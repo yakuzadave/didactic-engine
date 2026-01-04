@@ -90,8 +90,10 @@ class WAVIngester:
 
         Raises:
             FileNotFoundError: If the specified file does not exist.
-            ValueError: If the file cannot be read as audio (corrupt file,
-                unsupported format, or read error).
+            ValueError: If the file is corrupt or in an unsupported audio format.
+            MemoryError: If insufficient memory is available to load the file.
+            PermissionError: If the file cannot be read due to permissions.
+            IOError: If an I/O error occurs (disk full, network issues, etc.).
 
         Example:
             >>> ingester = WAVIngester(sample_rate=22050)
@@ -109,27 +111,66 @@ class WAVIngester:
             raise FileNotFoundError(f"Audio file not found: {file_path}")
 
         try:
+            import time
+            import logging
+            logger = logging.getLogger(__name__)
+
             # Load audio file using soundfile first to get native sample rate
+            t0 = time.time()
             audio, native_sr = sf.read(str(file_path))
-            
+            t1 = time.time()
+            logger.debug(f"soundfile.read took {t1-t0:.3f}s for {file_path.name}")
+
             # Convert to mono if stereo (soundfile returns (samples, channels))
             if audio.ndim == 2:
+                t_mono_start = time.time()
                 audio = np.mean(audio, axis=1)
-            
+                logger.debug(f"Mono conversion took {time.time()-t_mono_start:.3f}s")
+
             # Ensure float type
             audio = audio.astype(np.float32)
-            
+
             # Resample if target sample rate is specified and differs
             if self.sample_rate is not None and self.sample_rate != native_sr:
+                t_resample_start = time.time()
                 audio = librosa.resample(
                     audio, orig_sr=native_sr, target_sr=self.sample_rate
                 )
+                t_resample_end = time.time()
+                logger.debug(f"Resampling {native_sr}Hz -> {self.sample_rate}Hz took {t_resample_end-t_resample_start:.3f}s")
                 return audio, self.sample_rate
-            
+
             return audio, native_sr
-            
-        except Exception as e:
-            raise ValueError(f"Failed to load audio file {file_path}: {str(e)}")
+
+        except FileNotFoundError:
+            # Re-raise FileNotFoundError as-is (already handled above, but be defensive)
+            raise
+        except sf.LibsndfileError as e:
+            # Corrupt or unsupported audio format
+            raise ValueError(
+                f"Corrupt or invalid audio file {file_path}: {e}. "
+                f"Check that the file is a valid audio format."
+            ) from e
+        except MemoryError as e:
+            # File too large for available memory
+            file_size_mb = file_path.stat().st_size / 1e6 if file_path.exists() else 0
+            raise MemoryError(
+                f"Insufficient memory to load {file_path} ({file_size_mb:.1f} MB). "
+                f"Try reducing the sample rate or closing other applications."
+            ) from e
+        except PermissionError as e:
+            # Permission denied on file
+            raise PermissionError(
+                f"Permission denied reading audio file {file_path}. "
+                f"Check file permissions."
+            ) from e
+        except (OSError, IOError) as e:
+            # I/O errors (disk full, network issues, etc.)
+            raise IOError(
+                f"I/O error reading audio file {file_path}: {e}. "
+                f"Check disk space and file accessibility."
+            ) from e
+        # Let other exceptions propagate with context
 
     def validate(self, audio: np.ndarray, sample_rate: int) -> bool:
         """Validate that audio data is suitable for processing.

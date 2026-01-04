@@ -3,7 +3,136 @@
 ## Overview
 Applied all code review recommendations to improve performance, flexibility, and feature handling in the music ETL pipeline.
 
-## Changes Implemented
+---
+
+## Recent Improvements (January 2026): Resilience & Robustness
+
+### New Resilience Module (`didactic_engine.resilience`)
+
+Added comprehensive resilience patterns to make the pipeline production-ready:
+
+#### 1. Retry with Exponential Backoff
+
+```python
+from didactic_engine import retry_with_backoff
+
+@retry_with_backoff(max_retries=3, base_delay=1.0)
+def flaky_operation():
+    # Automatically retries on failure with exponential backoff
+    pass
+```
+
+Features:
+- Configurable max retries, base delay, max delay
+- Exponential backoff with jitter to prevent thundering herd
+- Selective retry based on exception types
+- Callback hook for retry events
+
+#### 2. Circuit Breaker Pattern
+
+```python
+from didactic_engine import CircuitBreaker
+
+breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60.0)
+
+@breaker.protect
+def call_external_service():
+    # Fails fast when service is down
+    pass
+```
+
+Features:
+- CLOSED → OPEN → HALF_OPEN state transitions
+- Prevents cascading failures
+- Pre-configured breakers for Demucs and Basic Pitch
+
+#### 3. Dependency Health Checks
+
+```python
+from didactic_engine import run_all_health_checks, print_health_report
+
+# Check all dependencies
+print_health_report()
+
+# Programmatic access
+results = run_all_health_checks()
+if not results["ffmpeg"].available:
+    print("FFmpeg required!")
+```
+
+Checks:
+- Demucs (CLI and Python module)
+- Basic Pitch (CLI)
+- Essentia (Python module)
+- FFmpeg (CLI)
+
+#### 4. Resource Cleanup
+
+```python
+from didactic_engine import resource_cleanup
+
+with resource_cleanup([temp_dir], cleanup_on_error=True):
+    # temp_dir deleted if exception raised
+    process_audio(input_file, temp_dir)
+```
+
+#### 5. Processing Checkpoints
+
+```python
+from didactic_engine import ProcessingCheckpoint
+
+checkpoint = ProcessingCheckpoint(song_id="my_song")
+checkpoint.mark_complete("ingest", result=audio_data)
+checkpoint.save("checkpoints/my_song.json")
+
+# Later: resume from checkpoint
+checkpoint = ProcessingCheckpoint.load("checkpoints/my_song.json")
+if checkpoint.is_complete("ingest"):
+    audio_data = checkpoint.get_result("ingest")
+```
+
+### Enhanced Batch Processing (`didactic_engine.batch`)
+
+New production-ready batch processor:
+
+```python
+from didactic_engine.batch import BatchProcessor, BatchConfig
+from didactic_engine.resilience import RetryConfig
+
+config = BatchConfig(
+    max_workers=4,
+    retry_config=RetryConfig(max_retries=3),
+    progress_enabled=True,
+    skip_existing=True,
+)
+
+processor = BatchProcessor(config)
+results = processor.process(input_files, output_dir)
+results.print_summary()
+```
+
+Features:
+- Parallel or sequential processing
+- Automatic retry with backoff
+- Progress tracking with tqdm
+- Skip already processed files
+- Detailed results reporting
+- Auto-save results to JSON
+
+### Test Coverage
+
+Added comprehensive tests for resilience module:
+- 27 new tests in `tests/test_resilience.py`
+- Tests for retry logic, circuit breaker states, health checks, cleanup
+
+### Documentation
+
+New documentation added:
+- `docs/10_RESILIENCE.md` - Complete guide to resilience patterns
+
+---
+
+## Previous Changes Implemented
 
 ### 1. Performance Optimization (Critical)
 

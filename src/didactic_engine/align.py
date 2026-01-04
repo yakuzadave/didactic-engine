@@ -59,6 +59,8 @@ def align_notes_to_beats(
         beat_interval = float(np.median(np.diff(beat_array)))
     else:
         beat_interval = 60.0 / tempo_bpm if tempo_bpm > 0 else 0.5
+    if beat_interval <= 0:
+        beat_interval = 60.0 / tempo_bpm if tempo_bpm > 0 else 0.5
 
     # Find max time we need to cover
     max_time = notes["end_s"].max()
@@ -75,7 +77,10 @@ def align_notes_to_beats(
         beat_array = np.arange(num_beats) * beat_interval
 
     # Calculate beats per bar
-    beats_per_bar = ts_num * (4.0 / ts_den)
+    if ts_num <= 0 or ts_den <= 0:
+        beats_per_bar = 4.0
+    else:
+        beats_per_bar = ts_num * (4.0 / ts_den)
 
     # Compute alignment for each note
     beat_indices = []

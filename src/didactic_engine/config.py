@@ -41,9 +41,19 @@ class PipelineConfig:
         preserve_chunk_audio: Whether to preserve original sample rate and channels
             for chunk WAVs. When True, chunks are written at native SR/channels instead
             of analysis_sr/mono. Features still use analysis_sr/mono. Default False.
+        enable_progress: Whether to show progress bars (tqdm). When None, auto-detect
+            based on whether stderr is a TTY.
         basic_pitch_backend: Basic Pitch inference backend ('tf', 'onnx', 'tflite', 'coreml').
-        demucs_timeout_s: Optional timeout (seconds) for Demucs separation.
-        basic_pitch_timeout_s: Optional timeout (seconds) for Basic Pitch transcription.
+        basic_pitch_keep_runs: How many Basic Pitch run directories to keep per stem.
+            Set to None or 0 to disable cleanup.
+        use_demucs_separation: Whether to attempt stem separation even if Demucs is available.
+        use_basic_pitch_transcription: Whether to attempt MIDI transcription even if Basic Pitch is available.
+        demucs_timeout_s: Timeout in seconds for Demucs separation. Default 3600s (1 hour).
+            Must be non-negative. Increase for very large files.
+        basic_pitch_timeout_s: Timeout in seconds for Basic Pitch transcription. Default 1800s (30 minutes).
+            Must be non-negative. Increase for very long audio files.
+        bar_feature_precompute: Whether to precompute spectral/MFCC/chroma features once per stem
+            and aggregate them per bar for faster processing. Default True.
     """
 
     song_id: str
@@ -66,17 +76,86 @@ class PipelineConfig:
     write_bar_chunks: bool = True
     write_bar_chunk_wavs: bool = True
     preserve_chunk_audio: bool = False
+    enable_progress: Optional[bool] = None
     basic_pitch_backend: str = "tf"
-    demucs_timeout_s: Optional[float] = None
-    basic_pitch_timeout_s: Optional[float] = None
+    basic_pitch_keep_runs: Optional[int] = 5
+    use_demucs_separation: bool = True
+    use_basic_pitch_transcription: bool = True
+    demucs_timeout_s: float = 3600.0  # 1 hour default (can be overridden for large files)
+    basic_pitch_timeout_s: float = 1800.0  # 30 minutes default
+    bar_feature_precompute: bool = True
 
     def __post_init__(self) -> None:
-        """Convert string paths to Path objects if needed."""
+        """Convert string paths to Path objects and validate configuration."""
         # Since frozen=True, we use object.__setattr__ for initialization
         if isinstance(self.input_wav, str):
             object.__setattr__(self, "input_wav", Path(self.input_wav))
         if isinstance(self.out_dir, str):
             object.__setattr__(self, "out_dir", Path(self.out_dir))
+
+        # Validate configuration parameters
+        if self.analysis_sr <= 0:
+            raise ValueError(
+                f"analysis_sr must be positive, got {self.analysis_sr}"
+            )
+
+        if self.preprocess_target_sr <= 0:
+            raise ValueError(
+                f"preprocess_target_sr must be positive, got {self.preprocess_target_sr}"
+            )
+
+        if self.hop_length <= 0:
+            raise ValueError(
+                f"hop_length must be positive, got {self.hop_length}"
+            )
+
+        if self.time_signature_num <= 0:
+            raise ValueError(
+                f"time_signature_num must be positive, got {self.time_signature_num}"
+            )
+
+        if self.time_signature_den not in {1, 2, 4, 8, 16, 32}:
+            raise ValueError(
+                f"time_signature_den must be a power of 2 (1, 2, 4, 8, 16, 32), "
+                f"got {self.time_signature_den}"
+            )
+
+        if self.demucs_timeout_s < 0:
+            raise ValueError(
+                f"demucs_timeout_s cannot be negative, got {self.demucs_timeout_s}"
+            )
+
+        if self.basic_pitch_timeout_s < 0:
+            raise ValueError(
+                f"basic_pitch_timeout_s cannot be negative, got {self.basic_pitch_timeout_s}"
+            )
+
+        if self.preprocess_silence_thresh_dbfs > 0:
+            raise ValueError(
+                f"preprocess_silence_thresh_dbfs must be negative (dBFS), "
+                f"got {self.preprocess_silence_thresh_dbfs}"
+            )
+
+        if self.preprocess_keep_silence_ms < 0:
+            raise ValueError(
+                f"preprocess_keep_silence_ms cannot be negative, "
+                f"got {self.preprocess_keep_silence_ms}"
+            )
+
+        if self.basic_pitch_backend not in {"tf", "onnx", "tflite", "coreml"}:
+            raise ValueError(
+                f"basic_pitch_backend must be one of 'tf', 'onnx', 'tflite', 'coreml', "
+                f"got '{self.basic_pitch_backend}'"
+            )
+
+        # Validate file existence (warn if missing, don't fail to allow programmatic creation)
+        if not self.input_wav.exists():
+            import warnings
+            warnings.warn(
+                f"Input WAV file not found at initialization: {self.input_wav}. "
+                f"Ensure it exists before running the pipeline.",
+                UserWarning
+            )
 
     @property
     def stems_dir(self) -> Path:

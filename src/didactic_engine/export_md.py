@@ -75,8 +75,10 @@ def export_midi_markdown(
 
     Args:
         aligned_notes: Dictionary mapping bar index to list of note dicts.
-            Each note dict should have keys: start, end, pitch, velocity.
-            Typically from :meth:`MIDIParser.align_to_grid`.
+            Each note dict should have keys for timing (start/end or start_s/end_s),
+            pitch, and velocity. Supports both DataFrame format (start_s/end_s)
+            from pipeline and legacy format (start/end) from tests.
+            Typically from :meth:`MIDIParser.align_to_grid` or DataFrame conversion.
         output_path: Path for output Markdown file. Parent directories
             are created if needed.
         song_id: Song identifier for the report title.
@@ -124,8 +126,10 @@ def export_midi_markdown(
             f.write("|----------|-------|------|----------|---------------|\n")
 
             for note in bar_notes:
-                start_time = note.get("start", note.get("original_start", 0))
-                end_time = note.get("end", start_time)
+                # Support both 'start'/'end' (from tests/legacy) and 'start_s'/'end_s' (from DataFrame)
+                start_time = note.get("start_s", note.get(
+                    "start", note.get("original_start", 0)))
+                end_time = note.get("end_s", note.get("end", start_time))
                 pitch = note.get("pitch", 0)
                 velocity = note.get("velocity", 0)
                 duration = end_time - start_time

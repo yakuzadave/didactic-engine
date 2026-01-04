@@ -112,4 +112,5 @@ markers = [
     "gpu: tests that require an NVIDIA GPU / CUDA execution provider",
     "integration: slower tests that call external tools such as demucs or basic-pitch",
     "optional_deps: tests that need optional extras like essentia or onnxruntime",
+    "performance: tests that measure performance and timing for longer audio files",
 ]

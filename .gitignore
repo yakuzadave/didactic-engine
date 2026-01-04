@@ -214,3 +214,14 @@ features/
 *.wav
 *.mid
 *.midi
+/.venv311wsl
+/.venv311/
+/.claude/
+benchmark_output/benchmark_metrics.json
+benchmark_output/scenario1_default/analysis/benchmark_default_mono_chunks/combined.json
+benchmark_output/scenario1_default/datasets/benchmark_default_mono_chunks/bar_features.parquet
+benchmark_output/scenario1_default/datasets/benchmark_default_mono_chunks/beats.parquet
+benchmark_output/scenario2_preserve/analysis/benchmark_preserve_stereo_chunks/combined.json
+benchmark_output/scenario2_preserve/datasets/benchmark_preserve_stereo_chunks/bar_features.parquet
+benchmark_output/scenario2_preserve/datasets/benchmark_preserve_stereo_chunks/beats.parquet
+data/as_above_60s_chunk_test/

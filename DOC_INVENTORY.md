@@ -81,6 +81,19 @@ Last Updated: 2026-01-02
 | `docs/03_DEBUGGING.md` | DONE | Troubleshooting |
 | `docs/04_CONTRIBUTING.md` | DONE | Contribution guide |
 | `docs/05_GLOSSARY.md` | DONE | Domain terms |
+| `docs/06_API_REFERENCE.md` | DONE | Module-by-module API reference |
+| `docs/07_DESIGN_PATTERNS_AND_DECISIONS.md` | DONE | Index linking patterns/anti-patterns/ADRs |
+| `docs/07_DESIGN_PATTERNS.md` | DONE | Catalog of design patterns used |
+| `docs/08_ANTI_PATTERNS.md` | DONE | Risks, footguns, and mitigations |
+| `docs/adr/README.md` | DONE | ADR index |
+| `docs/adr/0001-immutable-config.md` | DONE | ADR: Immutable PipelineConfig |
+| `docs/adr/0002-graceful-degradation.md` | DONE | ADR: Graceful degradation |
+| `docs/adr/0003-cli-first-external-tools.md` | DONE | ADR: CLI-first integration |
+| `docs/adr/0004-bar-chunking-performance-tunability.md` | DONE | ADR: Chunking perf tunability |
+| `docs/adr/0005-results-as-dict.md` | DONE | ADR: Results as dict |
+| `docs/adr/0006-consolidate-chunking.md` | DONE | ADR: Consolidate chunking implementation |
+| `docs/knowledge_graph/README.md` | DONE | Knowledge graph overview + regeneration |
+| `docs/09_DEPENDENCY_MAPS.md` | DONE | Visual dependency maps + coupling hotspots |
 
 ---
 

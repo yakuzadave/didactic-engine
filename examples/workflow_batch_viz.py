@@ -166,6 +166,9 @@ def _read_bar_features_polars(output_dir: Path, song_ids: List[str]) -> Optional
     if not lazy_frames:
         return None
 
+    # Use 'diagonal' concat because bar_features schemas may evolve or differ slightly
+    # between songs (e.g., additional feature columns). Diagonal concat safely unions
+    # columns and fills missing values, whereas 'vertical' would assume identical schemas.
     combined = pl.concat(lazy_frames, how="diagonal")
     collected = combined.collect()
     logger.info(

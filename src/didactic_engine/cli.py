@@ -76,6 +76,11 @@ Examples:
         ),
     )
     parser.add_argument(
+        "--no-demucs",
+        action="store_true",
+        help="Skip stem separation even if Demucs is installed",
+    )
+    parser.add_argument(
         "--demucs-timeout",
         type=float,
         default=None,
@@ -149,6 +154,11 @@ Examples:
         ),
     )
     parser.add_argument(
+        "--no-transcription",
+        action="store_true",
+        help="Skip MIDI transcription even if Basic Pitch is installed",
+    )
+    parser.add_argument(
         "--basic-pitch-timeout",
         type=float,
         default=None,
@@ -157,6 +167,20 @@ Examples:
             "If not set, Basic Pitch is allowed to run without a timeout."
         ),
     )
+    progress_group = parser.add_mutually_exclusive_group()
+    progress_group.add_argument(
+        "--progress",
+        dest="progress",
+        action="store_true",
+        help="Force progress bars on (default: auto when stderr is a TTY)",
+    )
+    progress_group.add_argument(
+        "--no-progress",
+        dest="progress",
+        action="store_false",
+        help="Disable progress bars",
+    )
+    parser.set_defaults(progress=None)
     parser.add_argument(
         "--log-level",
         default="INFO",
@@ -213,6 +237,7 @@ Examples:
             demucs_model=args.demucs_model,
             demucs_device=args.demucs_device,
             demucs_timeout_s=args.demucs_timeout,
+            use_demucs_separation=not args.no_demucs,
             analysis_sr=args.sr,
             hop_length=args.hop,
             time_signature_num=args.ts_num,
@@ -225,6 +250,8 @@ Examples:
             preserve_chunk_audio=args.preserve_chunk_audio,
             basic_pitch_backend=args.basic_pitch_backend,
             basic_pitch_timeout_s=args.basic_pitch_timeout,
+            use_basic_pitch_transcription=not args.no_transcription,
+            enable_progress=args.progress,
             logger=logger,
         )
         
@@ -258,6 +285,7 @@ Examples:
             demucs_model=args.demucs_model,
             demucs_device=args.demucs_device,
             demucs_timeout_s=args.demucs_timeout,
+            use_demucs_separation=not args.no_demucs,
             analysis_sr=args.sr,
             hop_length=args.hop,
             time_signature_num=args.ts_num,
@@ -270,6 +298,8 @@ Examples:
             preserve_chunk_audio=args.preserve_chunk_audio,
             basic_pitch_backend=args.basic_pitch_backend,
             basic_pitch_timeout_s=args.basic_pitch_timeout,
+            use_basic_pitch_transcription=not args.no_transcription,
+            enable_progress=args.progress,
         )
 
         # Run pipeline

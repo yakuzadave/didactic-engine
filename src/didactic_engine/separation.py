@@ -10,6 +10,7 @@ Key Features:
     - Automatic stem discovery via filesystem glob
     - Graceful error handling with actionable error messages
     - Support for both file-based and array-based separation
+    - Circuit breaker pattern for resilient operation
 
 Prerequisites:
     Demucs must be installed separately::
@@ -35,6 +36,7 @@ See Also:
     - :mod:`didactic_engine.transcription` for MIDI transcription
 """
 
+import logging
 import shutil
 import subprocess
 from pathlib import Path
@@ -43,6 +45,35 @@ import numpy as np
 import soundfile as sf
 
 from didactic_engine.subprocess_utils import run_checked
+
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
+
+
+def check_demucs_availability() -> bool:
+    """Check if Demucs is available for use (public utility function).
+    
+    Checks both CLI availability (via PATH) and Python module import.
+    
+    Returns:
+        True if Demucs is available, False otherwise.
+    
+    Example:
+        >>> if check_demucs_availability():
+        ...     print("Demucs is ready to use")
+        ... else:
+        ...     print("Please install Demucs: pip install demucs")
+    """
+    # Check CLI availability
+    if shutil.which("demucs") is not None:
+        return True
+
+    # Check Python module availability
+    try:
+        import demucs  # noqa: F401
+        return True
+    except ImportError:
+        return False
 
 
 class StemSeparator:

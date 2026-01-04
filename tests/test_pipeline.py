@@ -20,6 +20,43 @@ from didactic_engine.pipeline import AudioPipeline
 import pandas as pd
 
 
+def _make_click_track(
+    sample_rate: int,
+    duration_s: float,
+    bpm: float = 120.0,
+    stereo: bool = False,
+) -> np.ndarray:
+    """Create a simple click track that reliably triggers beat detection.
+
+    We intentionally use short Hann-windowed pulses on beat boundaries.
+    """
+    n = int(sample_rate * duration_s)
+    audio = np.zeros(n, dtype=np.float32)
+    beat_interval = 60.0 / bpm
+    # Slightly longer pulses + a bit of noise makes librosa's beat tracker
+    # much more reliable across platforms.
+    pulse_len = max(1, int(0.02 * sample_rate))  # ~20ms
+
+    for i in range(int(duration_s / beat_interval) + 1):
+        start = int(i * beat_interval * sample_rate)
+        end = min(n, start + pulse_len)
+        if end > start:
+            audio[start:end] += (0.9 * np.hanning(end -
+                                 start)).astype(np.float32)
+
+    # Add low-level deterministic noise so the onset envelope isn't degenerate.
+    rng = np.random.default_rng(0)
+    audio += (0.01 * rng.standard_normal(n)).astype(np.float32)
+
+    if not stereo:
+        return audio
+
+    # Make channels slightly different to ensure we can validate preservation.
+    left = audio
+    right = 0.5 * audio
+    return np.column_stack((left, right)).astype(np.float32)
+
+
 class TestWAVIngester:
     """Test WAV ingestion functionality."""
 
@@ -308,6 +345,43 @@ class TestExportMD:
                 assert "test_song" in content
                 assert "Bar 0" in content
                 assert "Bar 1" in content
+
+    def test_export_midi_markdown_with_dataframe_columns(self):
+        """Test MIDI Markdown export with DataFrame-style column names (start_s/end_s)."""
+        from didactic_engine.export_md import export_midi_markdown
+
+        # Create test aligned notes using DataFrame column names
+        # This simulates what the pipeline actually produces
+        aligned_notes = {
+            0: [
+                {"start_s": 0.1, "end_s": 0.5, "pitch": 60, "velocity": 100},
+                {"start_s": 0.3, "end_s": 0.6, "pitch": 64, "velocity": 90},
+            ],
+            1: [
+                {"start_s": 1.0, "end_s": 1.5, "pitch": 67, "velocity": 80},
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = os.path.join(tmpdir, "test_report.md")
+            export_midi_markdown(
+                aligned_notes, output_path, song_id="test_song")
+
+            assert os.path.exists(output_path)
+
+            # Check content includes non-zero time and duration values
+            with open(output_path, "r") as f:
+                content = f.read()
+                assert "MIDI Analysis Report" in content
+                assert "test_song" in content
+                assert "Bar 0" in content
+                assert "Bar 1" in content
+                # Verify time values are not all 0.000
+                assert "0.100" in content  # start_s of first note
+                assert "0.400" in content  # duration of first note (0.5 - 0.1)
+                # Ensure we're not getting 0.000 for everything
+                # Some 0.000 is OK but not all values
+                assert content.count("0.000") < 10
 
     def test_pitch_to_name(self):
         """Test pitch to note name conversion."""
@@ -625,21 +699,16 @@ class TestBatchProcessing:
 class TestChunkPathHandling:
     """Test chunk_path None handling in bar features."""
 
-    def test_chunk_path_is_none_when_wavs_not_written(self):
-        """Test that chunk_path is None when write_bar_chunk_wavs=False."""
+    def test_chunk_path_is_empty_when_wavs_not_written(self):
+        """Test that chunk_path is empty and no WAVs are written when write_bar_chunk_wavs=False."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
 
-            # Create longer test audio with clear beat (10 seconds to ensure multiple bars)
+            # Create deterministic click-track audio (reliable beat detection)
             sample_rate = 22050
             duration = 10.0
-            t = np.linspace(0, duration, int(sample_rate * duration), False)
-            # Create a rhythmic beat pattern (120 BPM = 2 Hz)
-            audio = np.sin(2 * np.pi * 440 * t).astype(np.float32)
-            # Add some rhythmic structure
-            beat_freq = 2.0  # 120 BPM
-            envelope = 0.5 + 0.5 * np.sin(2 * np.pi * beat_freq * t)
-            audio = audio * envelope
+            audio = _make_click_track(
+                sample_rate, duration, bpm=120.0, stereo=False)
 
             wav_path = tmpdir_path / "test.wav"
             sf.write(wav_path, audio, sample_rate)
@@ -654,6 +723,8 @@ class TestChunkPathHandling:
                 write_bar_chunks=True,
                 write_bar_chunk_wavs=False,  # Don't write chunk files
                 use_pydub_preprocess=False,
+                use_demucs_separation=False,
+                use_basic_pitch_transcription=False,
             )
 
             # Run pipeline
@@ -661,9 +732,8 @@ class TestChunkPathHandling:
             pipeline = AudioPipeline(cfg)
             results = pipeline.run()
 
-            # Check if bar_features was created
-            if "bar_features_parquet" not in results:
-                pytest.skip("No bar features created - audio may be too short or beats not detected")
+            # We expect bar features to exist for this deterministic click-track.
+            assert "bar_features_parquet" in results
 
             # Load bar features parquet
             bar_features_path = Path(results["bar_features_parquet"])
@@ -672,26 +742,29 @@ class TestChunkPathHandling:
             import pandas as pd
             df = pd.read_parquet(bar_features_path)
 
-            # Verify chunk_path is None for all rows
+            # Verify chunk_path is empty for all rows
             assert not df.empty, "Should have bar features"
             assert "chunk_path" in df.columns, "chunk_path column should exist"
-            assert df["chunk_path"].isna().all(), "All chunk_path values should be None/NaN"
+
+            # We keep chunk_path schema stable for Parquet: empty string means "not persisted".
+            assert (df["chunk_path"].fillna("") == "").all(
+            ), "All chunk_path values should be empty"
+
+            # And we should not have written any chunk WAVs to disk.
+            chunk_wavs = list(cfg.chunks_dir.rglob("bar_*.wav"))
+            assert chunk_wavs == [
+            ], f"Expected no chunk WAV files, found: {chunk_wavs[:5]}"
 
     def test_chunk_path_is_string_when_wavs_written(self):
         """Test that chunk_path is a valid path string when write_bar_chunk_wavs=True."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
 
-            # Create longer test audio with clear beat (10 seconds to ensure multiple bars)
+            # Create deterministic click-track audio (reliable beat detection)
             sample_rate = 22050
             duration = 10.0
-            t = np.linspace(0, duration, int(sample_rate * duration), False)
-            # Create a rhythmic beat pattern (120 BPM = 2 Hz)
-            audio = np.sin(2 * np.pi * 440 * t).astype(np.float32)
-            # Add some rhythmic structure
-            beat_freq = 2.0  # 120 BPM
-            envelope = 0.5 + 0.5 * np.sin(2 * np.pi * beat_freq * t)
-            audio = audio * envelope
+            audio = _make_click_track(
+                sample_rate, duration, bpm=120.0, stereo=False)
 
             wav_path = tmpdir_path / "test.wav"
             sf.write(wav_path, audio, sample_rate)
@@ -706,6 +779,8 @@ class TestChunkPathHandling:
                 write_bar_chunks=True,
                 write_bar_chunk_wavs=True,  # Write chunk files
                 use_pydub_preprocess=False,
+                use_demucs_separation=False,
+                use_basic_pitch_transcription=False,
             )
 
             # Run pipeline
@@ -713,9 +788,8 @@ class TestChunkPathHandling:
             pipeline = AudioPipeline(cfg)
             results = pipeline.run()
 
-            # Check if bar_features was created
-            if "bar_features_parquet" not in results:
-                pytest.skip("No bar features created - audio may be too short or beats not detected")
+            # We expect bar features to exist for this deterministic click-track.
+            assert "bar_features_parquet" in results
 
             # Load bar features parquet
             bar_features_path = Path(results["bar_features_parquet"])
@@ -744,16 +818,11 @@ class TestPreserveChunkAudio:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
 
-            # Create stereo test audio (10 seconds with rhythmic beat)
+            # Create stereo click-track audio (reliable beat detection)
             sample_rate = 44100
             duration = 10.0
-            t = np.linspace(0, duration, int(sample_rate * duration), False)
-            # Create rhythmic structure
-            beat_freq = 2.0  # 120 BPM
-            envelope = 0.5 + 0.5 * np.sin(2 * np.pi * beat_freq * t)
-            left = (np.sin(2 * np.pi * 440 * t) * envelope).astype(np.float32)
-            right = (np.sin(2 * np.pi * 880 * t) * envelope).astype(np.float32)
-            stereo_audio = np.column_stack((left, right))
+            stereo_audio = _make_click_track(
+                sample_rate, duration, bpm=120.0, stereo=True)
 
             wav_path = tmpdir_path / "test_stereo.wav"
             sf.write(wav_path, stereo_audio, sample_rate)
@@ -770,6 +839,8 @@ class TestPreserveChunkAudio:
                 write_bar_chunk_wavs=True,
                 preserve_chunk_audio=False,  # Use analysis audio
                 use_pydub_preprocess=False,
+                use_demucs_separation=False,
+                use_basic_pitch_transcription=False,
             )
 
             # Run pipeline
@@ -779,9 +850,6 @@ class TestPreserveChunkAudio:
 
             # Check chunk files
             chunks_dir = cfg.chunks_dir / "full_mix"
-            if not chunks_dir.exists() or not list(chunks_dir.glob("*.wav")):
-                pytest.skip("No chunk files created - beats may not have been detected")
-
             chunk_files = list(chunks_dir.glob("*.wav"))
             assert len(chunk_files) > 0, "Should have chunk files"
 
@@ -797,16 +865,11 @@ class TestPreserveChunkAudio:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
 
-            # Create stereo test audio (10 seconds with rhythmic beat)
+            # Create stereo click-track audio (reliable beat detection)
             sample_rate = 44100
             duration = 10.0
-            t = np.linspace(0, duration, int(sample_rate * duration), False)
-            # Create rhythmic structure
-            beat_freq = 2.0  # 120 BPM
-            envelope = 0.5 + 0.5 * np.sin(2 * np.pi * beat_freq * t)
-            left = (np.sin(2 * np.pi * 440 * t) * envelope).astype(np.float32)
-            right = (np.sin(2 * np.pi * 880 * t) * envelope).astype(np.float32)
-            stereo_audio = np.column_stack((left, right))
+            stereo_audio = _make_click_track(
+                sample_rate, duration, bpm=120.0, stereo=True)
 
             wav_path = tmpdir_path / "test_stereo.wav"
             sf.write(wav_path, stereo_audio, sample_rate)
@@ -823,6 +886,8 @@ class TestPreserveChunkAudio:
                 write_bar_chunk_wavs=True,
                 preserve_chunk_audio=True,  # Preserve original
                 use_pydub_preprocess=False,
+                use_demucs_separation=False,
+                use_basic_pitch_transcription=False,
             )
 
             # Run pipeline
@@ -832,9 +897,6 @@ class TestPreserveChunkAudio:
 
             # Check chunk files
             chunks_dir = cfg.chunks_dir / "full_mix"
-            if not chunks_dir.exists() or not list(chunks_dir.glob("*.wav")):
-                pytest.skip("No chunk files created - beats may not have been detected")
-
             chunk_files = list(chunks_dir.glob("*.wav"))
             assert len(chunk_files) > 0, "Should have chunk files"
 
@@ -851,14 +913,11 @@ class TestPreserveChunkAudio:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
 
-            # Create mono test audio at high sample rate (10 seconds with rhythmic beat)
+            # Create mono click-track audio at high sample rate
             sample_rate = 48000
             duration = 10.0
-            t = np.linspace(0, duration, int(sample_rate * duration), False)
-            # Create rhythmic structure
-            beat_freq = 2.0  # 120 BPM
-            envelope = 0.5 + 0.5 * np.sin(2 * np.pi * beat_freq * t)
-            mono_audio = (np.sin(2 * np.pi * 440 * t) * envelope).astype(np.float32)
+            mono_audio = _make_click_track(
+                sample_rate, duration, bpm=120.0, stereo=False)
 
             wav_path = tmpdir_path / "test_mono.wav"
             sf.write(wav_path, mono_audio, sample_rate)
@@ -875,6 +934,8 @@ class TestPreserveChunkAudio:
                 write_bar_chunk_wavs=True,
                 preserve_chunk_audio=True,  # Preserve original
                 use_pydub_preprocess=False,
+                use_demucs_separation=False,
+                use_basic_pitch_transcription=False,
             )
 
             # Run pipeline
@@ -884,9 +945,6 @@ class TestPreserveChunkAudio:
 
             # Check chunk files
             chunks_dir = cfg.chunks_dir / "full_mix"
-            if not chunks_dir.exists() or not list(chunks_dir.glob("*.wav")):
-                pytest.skip("No chunk files created - beats may not have been detected")
-
             chunk_files = list(chunks_dir.glob("*.wav"))
             assert len(chunk_files) > 0, "Should have chunk files"
 
@@ -902,14 +960,11 @@ class TestPreserveChunkAudio:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
 
-            # Create test audio at high sample rate (10 seconds with rhythmic beat)
+            # Create click-track audio at high sample rate (reliable beat detection)
             sample_rate = 48000
             duration = 10.0
-            t = np.linspace(0, duration, int(sample_rate * duration), False)
-            # Create rhythmic structure
-            beat_freq = 2.0  # 120 BPM
-            envelope = 0.5 + 0.5 * np.sin(2 * np.pi * beat_freq * t)
-            audio = (np.sin(2 * np.pi * 440 * t) * envelope).astype(np.float32)
+            audio = _make_click_track(
+                sample_rate, duration, bpm=120.0, stereo=False)
 
             wav_path = tmpdir_path / "test.wav"
             sf.write(wav_path, audio, sample_rate)
@@ -926,6 +981,8 @@ class TestPreserveChunkAudio:
                 write_bar_chunk_wavs=True,
                 preserve_chunk_audio=True,
                 use_pydub_preprocess=False,
+                use_demucs_separation=False,
+                use_basic_pitch_transcription=False,
             )
 
             # Run pipeline
@@ -933,9 +990,7 @@ class TestPreserveChunkAudio:
             pipeline = AudioPipeline(cfg)
             results = pipeline.run()
 
-            # Check if bar_features was created
-            if "bar_features_parquet" not in results:
-                pytest.skip("No bar features created - audio may be too short or beats not detected")
+            assert "bar_features_parquet" in results
 
             # Load bar features parquet
             bar_features_path = Path(results["bar_features_parquet"])
@@ -946,10 +1001,14 @@ class TestPreserveChunkAudio:
 
             # Features should be computed - verify we have feature columns
             assert not df.empty, "Should have bar features"
-            assert "rms_energy" in df.columns, "Should have RMS energy feature"
+            assert "rms" in df.columns, "Should have RMS feature"
 
             # The features should be valid (not NaN) - features are computed from analysis_sr audio
-            assert df["rms_energy"].notna().all(), "RMS energy should be computed"
+            assert df["rms"].notna().all(), "RMS should be computed"
+
+            # Regression guard: short chunks should not trigger librosa's
+            # "n_fft is too large for input signal" warning.
+            # (This is tested indirectly by running the suite with warnings enabled.)
 
 
 class TestBasicPitchTranscriber:

@@ -8,6 +8,7 @@ import json
 import logging
 import platform
 import shutil
+import sys
 import time
 from pathlib import Path
 from typing import Dict, List, Any, Optional, TYPE_CHECKING, Tuple
@@ -23,6 +24,32 @@ from didactic_engine.features import FeatureExtractor
 from didactic_engine.align import align_notes_to_beats
 from didactic_engine.export_md import export_midi_markdown
 from didactic_engine.export_abc import export_abc
+from didactic_engine.resilience import (
+    retry_with_backoff,
+    demucs_circuit,
+    basic_pitch_circuit,
+)
+
+# Optional tqdm import for progress bars
+try:
+    from tqdm import tqdm
+    TQDM_AVAILABLE = True
+except ImportError:
+    TQDM_AVAILABLE = False
+    # Define a no-op tqdm fallback
+    def tqdm(iterable, **kwargs):
+        return iterable
+
+
+def _resolve_progress_enabled(explicit: Optional[bool]) -> bool:
+    if not TQDM_AVAILABLE:
+        return False
+    if explicit is not None:
+        return explicit
+    try:
+        return sys.stderr.isatty()
+    except Exception:
+        return False
 
 if TYPE_CHECKING:
     from didactic_engine.config import PipelineConfig
@@ -35,10 +62,11 @@ logger.addHandler(logging.NullHandler())
 class _PipelineStep:
     """Lightweight context manager to log step start/completion with duration."""
 
-    def __init__(self, log: logging.Logger, name: str):
+    def __init__(self, log: logging.Logger, name: str, timings_dict: Optional[Dict[str, float]] = None):
         self.log = log
         self.name = name
         self.start_time = 0.0
+        self.timings_dict = timings_dict
 
     def __enter__(self) -> "_PipelineStep":
         self.start_time = time.time()
@@ -47,6 +75,16 @@ class _PipelineStep:
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
         duration = time.time() - self.start_time
+
+        # Store timing in the dict if provided
+        if self.timings_dict is not None:
+            # Convert step name to a dict key (e.g., "Step 2: Ingest WAV file" -> "step_2_ingest_wav")
+            key = self.name.lower().replace(":", "").replace(" ", "_")
+            # Remove duplicate underscores
+            while "__" in key:
+                key = key.replace("__", "_")
+            self.timings_dict[key] = round(duration, 3)
+
         if exc_type is None:
             self.log.info("%s completed in %.2fs", self.name, duration)
         else:
@@ -87,6 +125,32 @@ class AudioPipeline:
         self.segmenter = StemSegmenter()
         self.feature_extractor = FeatureExtractor()
 
+        # Dictionary to store step timings for performance analysis
+        self.step_timings: Dict[str, float] = {}
+
+    @retry_with_backoff(
+        max_retries=3,
+        base_delay=1.0,
+        retryable_exceptions=(IOError, TimeoutError, OSError)
+    )
+    def _load_stem_with_retry(self, stem_path: Path) -> tuple[Any, int]:
+        """Load a stem file with automatic retry on transient failures.
+
+        Uses exponential backoff to handle temporary I/O issues, network
+        failures, or disk contention.
+
+        Args:
+            stem_path: Path to the stem audio file.
+
+        Returns:
+            Tuple of (audio_array, sample_rate).
+
+        Raises:
+            RetryError: If all retry attempts are exhausted.
+            Other exceptions: If non-retryable errors occur.
+        """
+        return self.ingester.load(stem_path)
+
     def run(self) -> Dict[str, Any]:
         """
         Run the complete audio processing pipeline.
@@ -95,6 +159,7 @@ class AudioPipeline:
             Dictionary containing all processing results and output paths.
         """
         cfg = self.cfg
+        self.step_timings.clear()
         self.logger.info(
             "Starting audio processing pipeline for %s (song_id=%s)",
             cfg.input_wav,
@@ -152,7 +217,12 @@ class AudioPipeline:
 
         with self._step("Step 7: Process stems (chunks/transcription/align)"):
             all_notes, all_bar_features, midi_results = self._process_stems(
-                stem_paths, bar_boundaries, beat_times, tempo_bpm
+                stem_paths,
+                bar_boundaries,
+                beat_times,
+                tempo_bpm,
+                audio,
+                sr,
             )
         results.update(midi_results)
 
@@ -182,7 +252,10 @@ class AudioPipeline:
 
     def _step(self, name: str) -> _PipelineStep:
         """Return a context manager that logs the lifecycle of a pipeline step."""
-        return _PipelineStep(self.logger, name)
+        return _PipelineStep(self.logger, name, self.step_timings)
+
+    def _progress_enabled(self) -> bool:
+        return _resolve_progress_enabled(self.cfg.enable_progress)
 
     def _emit_environment_warnings(self) -> None:
         """Emit warnings for common environment/performance footguns.
@@ -195,12 +268,19 @@ class AudioPipeline:
         # WSL detection: kernel release commonly contains 'microsoft'.
         is_wsl = False
         if platform.system().lower() == "linux":
+            kernel_release_path = Path("/proc/sys/kernel/osrelease")
             try:
-                release = Path("/proc/sys/kernel/osrelease").read_text(
-                    encoding="utf-8"
-                ).lower()
+                release = kernel_release_path.read_text(encoding="utf-8").lower()
                 is_wsl = "microsoft" in release
-            except Exception:
+            except Exception as exc:
+                # Best-effort detection only; log at DEBUG so issues are diagnosable
+                self.logger.debug(
+                    "WSL detection failed when reading %s; assuming non-WSL environment. "
+                    "Error: %s",
+                    kernel_release_path,
+                    exc,
+                    exc_info=True,
+                )
                 is_wsl = False
 
         if is_wsl:
@@ -269,26 +349,40 @@ class AudioPipeline:
 
         return analysis, tempo_bpm, beat_times
 
-    def _separate_stems(self) -> Tuple[Dict[str, Path], Optional[str]]:
-        """Attempt Demucs stem separation, falling back gracefully when unavailable."""
+    def _separate_stems(self) -> tuple[Dict[str, Path], Optional[str]]:
+        """Attempt Demucs stem separation with circuit breaker protection.
+
+        Uses circuit breaker pattern to prevent cascading failures when
+        Demucs is unavailable or repeatedly failing.
+        """
+        if not self.cfg.use_demucs_separation:
+            self.logger.info("Stem separation disabled by configuration; using full_mix")
+            return {"full_mix": self.cfg.input_wav}, "disabled by configuration"
+
         try:
             from didactic_engine.separation import StemSeparator
 
-            separator = StemSeparator(
-                model=self.cfg.demucs_model,
-                device=self.cfg.demucs_device,
-                timeout_s=self.cfg.demucs_timeout_s,
-            )
-            stem_paths = separator.separate(
-                self.cfg.input_wav, self.cfg.stems_dir)
-            self.logger.info(
-                "Separated into %d stems: %s",
-                len(stem_paths),
-                list(stem_paths.keys()),
-            )
-            return stem_paths, None
+            # Use circuit breaker to protect against repeated Demucs failures
+            with demucs_circuit:
+                separator = StemSeparator(
+                    model=self.cfg.demucs_model,
+                    device=self.cfg.demucs_device,
+                    timeout_s=self.cfg.demucs_timeout_s,
+                )
+                stem_paths = separator.separate(
+                    self.cfg.input_wav, self.cfg.stems_dir)
+                self.logger.info(
+                    "Separated into %d stems: %s",
+                    len(stem_paths),
+                    list(stem_paths.keys()),
+                )
+                return stem_paths, None
         except RuntimeError as exc:
-            self.logger.warning("Stem separation skipped: %s", exc)
+            self.logger.warning(
+                "Stem separation skipped (circuit state: %s): %s",
+                demucs_circuit.state.value,
+                exc
+            )
             return {"full_mix": self.cfg.input_wav}, str(exc)
 
     def _compute_bar_boundaries(
@@ -305,8 +399,11 @@ class AudioPipeline:
             self.cfg.time_signature_den,
             duration_s,
         )
-        beats_per_bar = self.cfg.time_signature_num * \
-            (4.0 / self.cfg.time_signature_den)
+        if self.cfg.time_signature_num <= 0 or self.cfg.time_signature_den <= 0:
+            beats_per_bar = 4.0
+        else:
+            beats_per_bar = self.cfg.time_signature_num * \
+                (4.0 / self.cfg.time_signature_den)
         self.logger.info(
             "Computed %d bars (beats_per_bar=%.2f)",
             len(bar_boundaries),
@@ -320,6 +417,8 @@ class AudioPipeline:
         bar_boundaries: List[Tuple[int, float, float]],
         beat_times: List[float],
         tempo_bpm: float,
+        analysis_audio: Any,
+        analysis_sr: int,
     ) -> Tuple[pd.DataFrame, List[Dict[str, Any]], Dict[str, Any]]:
         """Process each stem: optional chunking, MIDI transcription, and alignment."""
         all_notes_dfs: List[pd.DataFrame] = []
@@ -328,160 +427,336 @@ class AudioPipeline:
 
         for stem_name, stem_path in stem_paths.items():
             self.logger.info("Processing stem '%s'", stem_name)
-            stem_audio, stem_sr = self.ingester.load(stem_path)
-            self.logger.debug(
-                "Loaded stem '%s' (%d samples @ %d Hz)",
-                stem_name,
-                len(stem_audio),
-                stem_sr,
-            )
+            stem_audio = None
+            stem_sr = None
+            stem_audio_native = None  # May be stereo if preserve_chunk_audio=True
+            stem_sr_native = None
+            stem_audio_source = "stem"
 
-            # Load original audio if preserving chunk characteristics
+            try:
+                # Load once at native SR to avoid redundant I/O
+                import soundfile as sf
+                import librosa
+                import numpy as np
+
+                raw_audio, stem_sr_native = sf.read(str(stem_path))
+
+                # Ensure float32 for consistency
+                raw_audio = raw_audio.astype(np.float32)
+
+                # Keep original for chunk preservation BEFORE mono conversion
+                # This ensures stereo files stay stereo when preserve_chunk_audio=True
+                stem_audio_native = raw_audio
+
+                # Convert to mono for analysis (always needed for feature extraction)
+                if raw_audio.ndim == 2:
+                    mono_audio = np.mean(raw_audio, axis=1)
+                else:
+                    mono_audio = raw_audio
+
+                # Resample to analysis SR if needed
+                if stem_sr_native != self.cfg.analysis_sr:
+                    stem_audio = librosa.resample(
+                        mono_audio,
+                        orig_sr=stem_sr_native,
+                        target_sr=self.cfg.analysis_sr
+                    )
+                    stem_sr = self.cfg.analysis_sr
+                else:
+                    stem_audio = mono_audio
+                    stem_sr = stem_sr_native
+
+                num_samples = len(stem_audio_native) if stem_audio_native.ndim == 1 else stem_audio_native.shape[0]
+                channels_str = "mono" if stem_audio_native.ndim == 1 else f"stereo ({stem_audio_native.shape[1]}ch)"
+                self.logger.debug(
+                    "Loaded stem '%s' (%d samples @ %d Hz native %s, resampled to %d Hz mono for analysis)",
+                    stem_name,
+                    num_samples,
+                    stem_sr_native,
+                    channels_str,
+                    stem_sr,
+                )
+            except Exception as exc:
+                self.logger.warning(
+                    "Failed to load stem '%s' from %s: %s. Attempting fallback to analysis audio.",
+                    stem_name,
+                    stem_path,
+                    exc,
+                )
+
+                # Validate that analysis_audio is suitable as a fallback
+                if analysis_audio is None or len(analysis_audio) == 0:
+                    raise RuntimeError(
+                        f"Cannot use analysis audio as fallback for stem '{stem_name}': "
+                        f"analysis audio is empty or None"
+                    ) from exc
+
+                # Calculate expected stem length based on analysis audio
+                # Demucs should produce stems with the same length as input
+                expected_duration_s = len(analysis_audio) / analysis_sr
+                min_acceptable_samples = int(expected_duration_s * 0.95 * analysis_sr)
+
+                if len(analysis_audio) < min_acceptable_samples:
+                    raise RuntimeError(
+                        f"Cannot use analysis audio as fallback for stem '{stem_name}': "
+                        f"length mismatch detected. Expected ~{expected_duration_s:.1f}s of audio "
+                        f"but analysis audio is only {len(analysis_audio)/analysis_sr:.1f}s. "
+                        f"This could indicate preprocessing or truncation issues."
+                    ) from exc
+
+                # Fallback is validated as safe
+                stem_audio = analysis_audio
+                stem_sr = analysis_sr
+                stem_audio_source = "analysis_fallback"
+                results_updates[f"stem_audio_fallback_{stem_name}"] = str(exc)
+                self.logger.info(
+                    "Using validated analysis audio as fallback for stem '%s' "
+                    "(%d samples @ %d Hz)",
+                    stem_name,
+                    len(stem_audio),
+                    stem_sr,
+                )
+
+            # Use already-loaded native audio for chunk preservation
+            # This eliminates redundant file I/O
             stem_audio_original = None
             stem_sr_original = None
-            if self.cfg.write_bar_chunks and self.cfg.write_bar_chunk_wavs and self.cfg.preserve_chunk_audio:
-                import soundfile as sf
-                # Load at native SR without downmixing or resampling
-                stem_audio_original, stem_sr_original = sf.read(str(stem_path))
-                # Ensure float32 for consistency
-                import numpy as np
-                stem_audio_original = stem_audio_original.astype(np.float32)
+            if (
+                stem_audio_source == "stem"
+                and self.cfg.write_bar_chunks
+                and self.cfg.write_bar_chunk_wavs
+                and self.cfg.preserve_chunk_audio
+                and stem_audio_native is not None
+            ):
+                # Reuse the native audio we already loaded (no redundant I/O!)
+                stem_audio_original = stem_audio_native
+                stem_sr_original = stem_sr_native
                 self.logger.debug(
-                    "Loaded original stem '%s' for chunk preservation (%d samples @ %d Hz, %d channels)",
-                    stem_name,
+                    "Using native-resolution stem audio for chunk preservation "
+                    "(%d samples @ %d Hz)",
                     len(stem_audio_original) if stem_audio_original.ndim == 1 else stem_audio_original.shape[0],
                     stem_sr_original,
-                    1 if stem_audio_original.ndim == 1 else stem_audio_original.shape[1],
                 )
 
             if self.cfg.write_bar_chunks:
-                stem_chunks_dir = self.cfg.chunks_dir / stem_name
-                stem_chunks_dir.mkdir(parents=True, exist_ok=True)
-                if self.cfg.write_bar_chunk_wavs:
-                    mode_str = "original audio" if self.cfg.preserve_chunk_audio else "analysis audio (mono @ {}Hz)".format(stem_sr)
-                    self.logger.info(
-                        "Writing bar chunks to %s (%s)", stem_chunks_dir, mode_str)
+                if stem_audio is None or stem_sr is None:
+                    self.logger.warning(
+                        "Skipping bar chunking for '%s' due to missing audio",
+                        stem_name,
+                    )
                 else:
-                    self.logger.info(
-                        "Computing bar features without writing chunk WAVs (write_bar_chunk_wavs=False)"
-                    )
-
-                # Performance note:
-                # We already have `stem_audio` in memory resampled to `stem_sr` (typically
-                # cfg.analysis_sr via WAVIngester). Avoid per-chunk decode + resample by:
-                #   1) slicing `stem_audio` directly
-                #   2) computing features from the slice
-                #   3) optionally writing the slice to disk for inspection/training
-                # When preserve_chunk_audio=True, we slice from stem_audio_original for WAV writing
-                # and from stem_audio for feature extraction.
-                import soundfile as sf
-
-                for bar_idx, start_s, end_s in bar_boundaries:
-                    start_sample = max(0, int(round(start_s * stem_sr)))
-                    end_sample = min(len(stem_audio), int(
-                        round(end_s * stem_sr)))
-
-                    # Skip empty/invalid segments (can occur due to rounding/clamping)
-                    if end_sample <= start_sample:
-                        continue
-
-                    chunk_audio = stem_audio[start_sample:end_sample]
-                    # Keep storage small and consistent
-                    try:
-                        import numpy as np
-
-                        if isinstance(chunk_audio, np.ndarray) and chunk_audio.dtype != np.float32:
-                            chunk_audio = chunk_audio.astype(
-                                np.float32, copy=False)
-                    except Exception:
-                        # If numpy isn't available or casting fails, proceed with original.
-                        pass
-
-                    chunk_path: Optional[Path] = None
-                    if self.cfg.write_bar_chunk_wavs:
-                        chunk_path = stem_chunks_dir / f"bar_{bar_idx:04d}.wav"
-
-                        # Use original audio for chunks if preserve_chunk_audio is enabled
-                        if self.cfg.preserve_chunk_audio and stem_audio_original is not None:
-                            start_sample_orig = max(0, int(round(start_s * stem_sr_original)))
-                            end_sample_orig = min(
-                                len(stem_audio_original) if stem_audio_original.ndim == 1 else stem_audio_original.shape[0],
-                                int(round(end_s * stem_sr_original))
+                    stem_chunks_dir = self.cfg.chunks_dir / stem_name
+                    stem_chunks_dir.mkdir(parents=True, exist_ok=True)
+                    write_chunk_wavs = self.cfg.write_bar_chunk_wavs and stem_audio_source == "stem"
+                    if write_chunk_wavs:
+                        mode_str = "original audio" if self.cfg.preserve_chunk_audio else "analysis audio (mono @ {}Hz)".format(stem_sr)
+                        self.logger.info(
+                            "Writing bar chunks to %s (%s)", stem_chunks_dir, mode_str)
+                    else:
+                        if self.cfg.write_bar_chunk_wavs and stem_audio_source != "stem":
+                            self.logger.info(
+                                "Skipping chunk WAV writes for '%s' (fallback audio source: %s)",
+                                stem_name,
+                                stem_audio_source,
                             )
-                            if stem_audio_original.ndim == 1:
-                                chunk_audio_to_write = stem_audio_original[start_sample_orig:end_sample_orig]
-                            else:
-                                chunk_audio_to_write = stem_audio_original[start_sample_orig:end_sample_orig, :]
-                            sf.write(str(chunk_path), chunk_audio_to_write, stem_sr_original)
                         else:
-                            sf.write(str(chunk_path), chunk_audio, stem_sr)
+                            self.logger.info(
+                                "Computing bar features without writing chunk WAVs (write_bar_chunk_wavs=False)"
+                            )
 
-                    # Feature extraction directly from the chunk audio avoids expensive
-                    # per-file resampling (librosa/soxr) during large runs.
-                    features = self.feature_extractor.extract_bar_features_from_audio(
-                        chunk_audio, stem_sr
+                    precomputed_bar_features = None
+                    if self.cfg.bar_feature_precompute:
+                        try:
+                            precomputed_bar_features = self.feature_extractor.precompute_bar_features(
+                                stem_audio,
+                                stem_sr,
+                                bar_boundaries,
+                                hop_length=self.cfg.hop_length,
+                            )
+                            if precomputed_bar_features:
+                                self.logger.debug(
+                                    "Precomputed bar features for '%s' (%d bars)",
+                                    stem_name,
+                                    len(precomputed_bar_features),
+                                )
+                        except Exception as exc:
+                            self.logger.warning(
+                                "Precomputing bar features failed for '%s': %s",
+                                stem_name,
+                                exc,
+                            )
+                            precomputed_bar_features = None
+
+                    # Performance note:
+                    # We already have `stem_audio` in memory resampled to `stem_sr` (typically
+                    # cfg.analysis_sr via WAVIngester). Avoid per-chunk decode + resample by:
+                    #   1) slicing `stem_audio` directly
+                    #   2) computing features from the slice
+                    #   3) optionally writing the slice to disk for inspection/training
+                    # When preserve_chunk_audio=True, we slice from stem_audio_original for WAV writing
+                    # and from stem_audio for feature extraction.
+                    import soundfile as sf  # type: ignore[import-not-found]
+
+                    # Add progress bar for bar-by-bar processing if tqdm is available
+                    progress_enabled = self._progress_enabled()
+                    bar_iter = tqdm(
+                        bar_boundaries,
+                        desc=f"Processing bars ({stem_name})",
+                        unit="bar",
+                        disable=not progress_enabled,
+                        leave=False,
                     )
-                    features.update({
-                        "song_id": self.cfg.song_id,
-                        "stem": stem_name,
-                        "bar_index": bar_idx,
-                        "start_s": start_s,
-                        "end_s": end_s,
-                        "duration_s": end_s - start_s,
-                        "tempo_bpm": tempo_bpm,
-                        "chunk_path": str(chunk_path) if chunk_path is not None else "",
-                    })
-                    all_bar_features.append(features)
+
+                    for bar_idx, start_s, end_s in bar_iter:
+                        try:
+                            start_sample = max(0, int(round(start_s * stem_sr)))
+                            end_sample = min(len(stem_audio), int(round(end_s * stem_sr)))
+
+                            # Skip empty/invalid segments (can occur due to rounding/clamping)
+                            if end_sample <= start_sample:
+                                continue
+
+                            chunk_audio = stem_audio[start_sample:end_sample]
+
+                            # Keep storage small and consistent
+                            try:
+                                import numpy as np
+
+                                if (
+                                    isinstance(chunk_audio, np.ndarray)
+                                    and chunk_audio.dtype != np.float32
+                                ):
+                                    chunk_audio = chunk_audio.astype(np.float32, copy=False)
+                            except Exception:
+                                # If numpy isn't available or casting fails, proceed with original.
+                                pass
+
+                            chunk_path: Optional[Path] = None
+                            if write_chunk_wavs:
+                                chunk_path = stem_chunks_dir / f"bar_{bar_idx:04d}.wav"
+
+                                # Use original audio for chunks if preserve_chunk_audio is enabled.
+                                if (
+                                    self.cfg.preserve_chunk_audio
+                                    and stem_audio_original is not None
+                                    and stem_sr_original is not None
+                                ):
+                                    start_sample_orig = max(
+                                        0, int(round(start_s * stem_sr_original))
+                                    )
+                                    end_sample_orig = min(
+                                        (
+                                            len(stem_audio_original)
+                                            if stem_audio_original.ndim == 1
+                                            else stem_audio_original.shape[0]
+                                        ),
+                                        int(round(end_s * stem_sr_original)),
+                                    )
+
+                                    if stem_audio_original.ndim == 1:
+                                        chunk_audio_to_write = stem_audio_original[
+                                            start_sample_orig:end_sample_orig
+                                        ]
+                                    else:
+                                        chunk_audio_to_write = stem_audio_original[
+                                            start_sample_orig:end_sample_orig, :
+                                        ]
+
+                                    sf.write(
+                                        str(chunk_path),
+                                        chunk_audio_to_write,
+                                        stem_sr_original,
+                                    )
+                                else:
+                                    sf.write(str(chunk_path), chunk_audio, stem_sr)
+
+                            # Feature extraction directly from the chunk audio avoids expensive
+                            # per-file resampling (librosa/soxr) during large runs.
+                            if precomputed_bar_features and bar_idx in precomputed_bar_features:
+                                features = dict(precomputed_bar_features[bar_idx])
+                            else:
+                                features = self.feature_extractor.extract_bar_features_from_audio(
+                                    chunk_audio,
+                                    stem_sr,
+                                )
+
+                            features.update(
+                                {
+                                    "song_id": self.cfg.song_id,
+                                    "stem": stem_name,
+                                    "bar_index": bar_idx,
+                                    "start_s": start_s,
+                                    "end_s": end_s,
+                                    "duration_s": end_s - start_s,
+                                    "tempo_bpm": tempo_bpm,
+                                    # Keep schema stable for Parquet.
+                                    "chunk_path": str(chunk_path) if chunk_path is not None else "",
+                                    "audio_source": stem_audio_source,
+                                }
+                            )
+                            all_bar_features.append(features)
+                        except Exception as exc:
+                            self.logger.warning(
+                                "Failed to process bar %d for stem '%s': %s",
+                                bar_idx,
+                                stem_name,
+                                exc,
+                            )
             else:
                 self.logger.info(
                     "Bar chunking disabled; skipping chunk export for '%s'", stem_name)
 
-            try:
-                from didactic_engine.transcription import BasicPitchTranscriber
-
-                transcriber = BasicPitchTranscriber(
-                    model_serialization=self.cfg.basic_pitch_backend,
-                    timeout_s=self.cfg.basic_pitch_timeout_s,
-                )
-                midi_path = transcriber.transcribe(
-                    stem_path, self.cfg.midi_dir
-                )
-                results_updates[f"midi_{stem_name}"] = str(midi_path)
+            if not self.cfg.use_basic_pitch_transcription:
                 self.logger.info(
-                    "Transcribed %s to MIDI at %s", stem_name, midi_path
-                )
-
-                midi_data = self.midi_parser.parse(midi_path)
-                notes_df = midi_data["notes_df"]
-
-                if not notes_df.empty:
-                    aligned_df = align_notes_to_beats(
-                        notes_df,
-                        beat_times,
-                        tempo_bpm,
-                        self.cfg.time_signature_num,
-                        self.cfg.time_signature_den,
-                    )
-                    aligned_df["song_id"] = self.cfg.song_id
-                    aligned_df["stem"] = stem_name
-                    all_notes_dfs.append(aligned_df)
-                    self.logger.info(
-                        "Aligned %d notes for stem '%s'",
-                        len(aligned_df),
-                        stem_name,
-                    )
-                else:
-                    self.logger.info(
-                        "No notes detected for stem '%s'", stem_name)
-
-            except RuntimeError as exc:
-                message = str(exc)
-                results_updates[f"transcription_error_{stem_name}"] = message
-                self.logger.warning(
-                    "MIDI transcription skipped for stem '%s': %s",
+                    "MIDI transcription disabled by configuration; skipping for stem '%s'",
                     stem_name,
-                    message,
                 )
+            else:
+                try:
+                    from didactic_engine.transcription import BasicPitchTranscriber
+
+                    # Use circuit breaker to protect against repeated Basic Pitch failures
+                    with basic_pitch_circuit:
+                        transcriber = BasicPitchTranscriber(
+                            model_serialization=self.cfg.basic_pitch_backend,
+                            timeout_s=self.cfg.basic_pitch_timeout_s,
+                            keep_runs=self.cfg.basic_pitch_keep_runs,
+                        )
+                        midi_path = transcriber.transcribe(stem_path, self.cfg.midi_dir)
+                        results_updates[f"midi_{stem_name}"] = str(midi_path)
+                        self.logger.info("Transcribed %s to MIDI at %s", stem_name, midi_path)
+
+                    midi_data = self.midi_parser.parse(midi_path)
+                    notes_df = midi_data["notes_df"]
+
+                    if not notes_df.empty:
+                        aligned_df = align_notes_to_beats(
+                            notes_df,
+                            beat_times,
+                            tempo_bpm,
+                            self.cfg.time_signature_num,
+                            self.cfg.time_signature_den,
+                        )
+                        aligned_df["song_id"] = self.cfg.song_id
+                        aligned_df["stem"] = stem_name
+                        all_notes_dfs.append(aligned_df)
+                        self.logger.info(
+                            "Aligned %d notes for stem '%s'",
+                            len(aligned_df),
+                            stem_name,
+                        )
+                    else:
+                        self.logger.info("No notes detected for stem '%s'", stem_name)
+
+                except Exception as exc:
+                    message = str(exc)
+                    results_updates[f"transcription_error_{stem_name}"] = message
+                    self.logger.warning(
+                        "MIDI transcription skipped for stem '%s' (circuit state: %s): %s",
+                        stem_name,
+                        basic_pitch_circuit.state.value,
+                        message,
+                    )
 
         all_notes = pd.concat(
             all_notes_dfs, ignore_index=True) if all_notes_dfs else pd.DataFrame()
@@ -584,10 +859,16 @@ class AudioPipeline:
             midi_key = f"midi_{stem_name}"
             if midi_key in results:
                 abc_path = cfg.reports_dir / f"{stem_name}.abc"
-                export_abc(results[midi_key], str(abc_path))
-                results[f"abc_{stem_name}"] = str(abc_path)
-                self.logger.info(
-                    "Wrote ABC notation for '%s' to %s", stem_name, abc_path)
+                success = export_abc(results[midi_key], str(abc_path))
+                if success:
+                    results[f"abc_{stem_name}"] = str(abc_path)
+                    self.logger.info(
+                        "Wrote ABC notation for '%s' to %s", stem_name, abc_path)
+                else:
+                    self.logger.warning(
+                        "ABC export failed for '%s' (music21 may not be installed or MIDI parsing failed)",
+                        stem_name
+                    )
 
     def _write_summary(
         self,
@@ -609,9 +890,46 @@ class AudioPipeline:
             "num_bars": len(bar_boundaries),
             "stems": results.get("stems", []),
             "num_notes_per_stem": {},
-            "essentia_used": cfg.use_essentia_features,
+            "essentia_requested": cfg.use_essentia_features,
+            "essentia_available": results.get("analysis", {}).get("essentia_available", False),
             "files_generated": [],
+            "step_timings": self.step_timings,
+            "config": {
+                "analysis_sr": cfg.analysis_sr,
+                "hop_length": cfg.hop_length,
+                "time_signature_num": cfg.time_signature_num,
+                "time_signature_den": cfg.time_signature_den,
+                "use_pydub_preprocess": cfg.use_pydub_preprocess,
+                "use_essentia_features": cfg.use_essentia_features,
+                "write_bar_chunks": cfg.write_bar_chunks,
+                "write_bar_chunk_wavs": cfg.write_bar_chunk_wavs,
+                "preserve_chunk_audio": cfg.preserve_chunk_audio,
+                "bar_feature_precompute": cfg.bar_feature_precompute,
+                "use_demucs_separation": cfg.use_demucs_separation,
+                "demucs_model": cfg.demucs_model,
+                "demucs_device": cfg.demucs_device,
+                "demucs_timeout_s": cfg.demucs_timeout_s,
+                "use_basic_pitch_transcription": cfg.use_basic_pitch_transcription,
+                "basic_pitch_backend": cfg.basic_pitch_backend,
+                "basic_pitch_timeout_s": cfg.basic_pitch_timeout_s,
+            },
+            "environment": {
+                "python": sys.version.split()[0],
+                "platform": platform.platform(),
+            },
         }
+
+        # Add lightweight capability hints (best-effort).
+        # We do not import heavy modules here; use PATH checks and lightweight helpers.
+        try:
+            import shutil
+
+            summary["capabilities"] = {
+                "demucs_on_path": shutil.which("demucs") is not None,
+                "basic_pitch_on_path": shutil.which("basic-pitch") is not None,
+            }
+        except Exception:
+            summary["capabilities"] = {}
 
         if not all_notes.empty:
             for stem in all_notes["stem"].unique():
@@ -695,10 +1013,20 @@ class AudioPipeline:
         log = logger or logging.getLogger(__name__)
         successful = []
         failed = []
-        
+
         log.info("Batch processing %d files...", len(input_files))
-        
-        for idx, (input_file, song_id) in enumerate(zip(input_files, song_ids), 1):
+
+        # Add progress bar for batch processing if tqdm is available
+        progress_enabled = _resolve_progress_enabled(kwargs.get("enable_progress"))
+        file_iter = tqdm(
+            enumerate(zip(input_files, song_ids), 1),
+            total=len(input_files),
+            desc="Processing audio files",
+            unit="file",
+            disable=not progress_enabled,
+        )
+
+        for idx, (input_file, song_id) in file_iter:
             log.info(
                 "[%d/%d] Processing: %s (song_id=%s)",
                 idx,
