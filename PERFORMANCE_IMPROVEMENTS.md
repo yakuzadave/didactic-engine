@@ -77,11 +77,11 @@ markers = [
 
 ### Expected Bar Counts
 
-| Duration | Tempo   | Time Sig | Est. Bars | Est. Beats |
-| -------- | ------- | -------- | --------- | ---------- |
-| 5 min    | 120 BPM | 4/4      | ~150      | ~600       |
-| 7.5 min  | 120 BPM | 4/4      | ~225      | ~900       |
-| 10 min   | 120 BPM | 4/4      | ~300      | ~1200      |
+| Duration | Tempo | Time Sig | Est. Bars | Est. Beats |
+|----------|-------|----------|-----------|------------|
+| 5 min    | 120 BPM | 4/4    | ~150      | ~600       |
+| 7.5 min  | 120 BPM | 4/4    | ~225      | ~900       |
+| 10 min   | 120 BPM | 4/4    | ~300      | ~1200      |
 
 ### Current Performance (Baseline)
 
@@ -93,7 +93,7 @@ On typical hardware (4-core CPU, 16GB RAM, SSD):
 ### Performance Targets
 
 - ✅ **2x real-time**: Process 10-minute song in < 20 minutes
-- ✅ **Memory efficiency**: Process 300+ bars without memory issues (no NaN values)
+- ✅ **Memory efficiency**: Process 300+ bars without memory issues
 - ✅ **Quality**: All chunks have valid boundaries and audio data
 - ✅ **Coverage**: Chunks cover ≥95% of audio duration
 
@@ -180,7 +180,7 @@ features = batch_extract_bar_features(
 
 ### Test Execution
 
-**Quick feedback loop** (<30 seconds):
+**Quick feedback loop** (< 30 seconds):
 ```bash
 pytest tests/test_pipeline.py::TestChunkPathHandling -v
 pytest tests/test_performance.py::TestChunkQuality -v
@@ -224,6 +224,6 @@ These improvements provide:
 - ✅ **Performance assertions** to catch regressions
 - ✅ **Quality checks** for chunk correctness
 - ✅ **Optimized functions** ready for integration
-- ✅ **Clear targets** for performance (<2x real-time)
+- ✅ **Clear targets** for performance (< 2x real-time)
 
 The performance test suite ensures that as the pipeline evolves, it continues to handle longer songs efficiently without regressions in speed or quality.

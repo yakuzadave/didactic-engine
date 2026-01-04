@@ -364,8 +364,7 @@ class TestExportMD:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             output_path = os.path.join(tmpdir, "test_report.md")
-            export_midi_markdown(
-                aligned_notes, output_path, song_id="test_song")
+            export_midi_markdown(aligned_notes, output_path, song_id="test_song")
 
             assert os.path.exists(output_path)
 
@@ -380,8 +379,7 @@ class TestExportMD:
                 assert "0.100" in content  # start_s of first note
                 assert "0.400" in content  # duration of first note (0.5 - 0.1)
                 # Ensure we're not getting 0.000 for everything
-                # Some 0.000 is OK but not all values
-                assert content.count("0.000") < 10
+                assert content.count("0.000") < 10  # Some 0.000 is OK but not all values
 
     def test_pitch_to_name(self):
         """Test pitch to note name conversion."""

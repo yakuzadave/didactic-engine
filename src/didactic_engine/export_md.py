@@ -127,8 +127,7 @@ def export_midi_markdown(
 
             for note in bar_notes:
                 # Support both 'start'/'end' (from tests/legacy) and 'start_s'/'end_s' (from DataFrame)
-                start_time = note.get("start_s", note.get(
-                    "start", note.get("original_start", 0)))
+                start_time = note.get("start_s", note.get("start", note.get("original_start", 0)))
                 end_time = note.get("end_s", note.get("end", start_time))
                 pitch = note.get("pitch", 0)
                 velocity = note.get("velocity", 0)
