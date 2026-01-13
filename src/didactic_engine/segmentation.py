@@ -103,6 +103,8 @@ def segment_beats_into_bars(
         beat_interval = float(np.median(np.diff(beat_array)))
     else:
         beat_interval = 60.0 / tempo_bpm if tempo_bpm > 0 else 0.5
+    if beat_interval <= 0:
+        beat_interval = 60.0 / tempo_bpm if tempo_bpm > 0 else 0.5
 
     # Extend beat array to cover audio duration
     if beat_array[-1] < audio_duration:
@@ -112,7 +114,10 @@ def segment_beats_into_bars(
         beat_array = np.concatenate([beat_array, extra_beats])
 
     # Calculate beats per bar
-    beats_per_bar = ts_num * (4.0 / ts_den)
+    if ts_num <= 0 or ts_den <= 0:
+        beats_per_bar = 4.0
+    else:
+        beats_per_bar = ts_num * (4.0 / ts_den)
 
     # Build bar boundaries
     bars: List[Tuple[int, float, float]] = []
@@ -186,32 +191,39 @@ def segment_audio_by_bars(
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load audio with pydub
-    audio = AudioSegment.from_file(str(audio_path))
-
     chunks_meta: List[Dict[str, Any]] = []
 
-    for bar_idx, start_s, end_s in boundaries:
-        # Convert to milliseconds
-        start_ms = int(start_s * 1000)
-        end_ms = int(end_s * 1000)
+    try:
+        # Load audio with pydub
+        audio = AudioSegment.from_file(str(audio_path))
 
-        # Extract chunk
-        chunk = audio[start_ms:end_ms]
+        for bar_idx, start_s, end_s in boundaries:
+            # Convert to milliseconds
+            start_ms = int(start_s * 1000)
+            end_ms = int(end_s * 1000)
 
-        # Write chunk
-        chunk_path = out_dir / f"bar_{bar_idx:04d}.wav"
-        chunk.export(str(chunk_path), format="wav")
+            # Extract chunk
+            chunk = audio[start_ms:end_ms]
 
-        chunks_meta.append({
-            "bar_index": bar_idx,
-            "start_s": start_s,
-            "end_s": end_s,
-            "duration_s": end_s - start_s,
-            "chunk_path": str(chunk_path),
-        })
+            # Write chunk
+            chunk_path = out_dir / f"bar_{bar_idx:04d}.wav"
+            chunk.export(str(chunk_path), format="wav")
 
-    return chunks_meta
+            chunks_meta.append({
+                "bar_index": bar_idx,
+                "start_s": start_s,
+                "end_s": end_s,
+                "duration_s": end_s - start_s,
+                "chunk_path": str(chunk_path),
+            })
+
+        return chunks_meta
+
+    finally:
+        # Explicitly clean up audio segment to release file handles
+        # pydub doesn't have explicit close(), but deleting helps garbage collection
+        if 'audio' in locals():
+            del audio
 
 
 class StemSegmenter:

@@ -35,7 +35,8 @@ See Also:
 """
 
 from pathlib import Path
-from typing import Dict, List, Any, Union
+from typing import Dict, List, Any, Union, Tuple
+import math
 import numpy as np
 import pandas as pd
 import librosa
@@ -245,6 +246,7 @@ class FeatureExtractor:
         rows = []
 
         for meta, features in zip(chunks_meta, chunk_features):
+            chunk_path = meta.get("chunk_path")
             row = {
                 "song_id": song_id,
                 "stem": stem,
@@ -252,7 +254,8 @@ class FeatureExtractor:
                 "start_s": meta.get("start_s", 0.0),
                 "end_s": meta.get("end_s", 0.0),
                 "duration_s": meta.get("duration_s", 0.0),
-                "chunk_path": str(meta.get("chunk_path", "")),
+                # Keep schema stable for Parquet.
+                "chunk_path": str(chunk_path) if chunk_path is not None else "",
             }
 
             # Flatten features and add to row
@@ -292,33 +295,227 @@ class FeatureExtractor:
 
         features: Dict[str, Any] = {}
 
+        audio_len = int(audio_mono.size)
+        if audio_len <= 0:
+            # Should not generally happen (pipeline skips empty segments), but keep
+            # a stable and safe feature dict if it does.
+            return {
+                "rms": 0.0,
+                "zcr": 0.0,
+                "energy": 0.0,
+                "spectral_centroid_mean": 0.0,
+                "spectral_centroid_std": 0.0,
+                "spectral_rolloff_mean": 0.0,
+                "spectral_rolloff_std": 0.0,
+                "spectral_bandwidth_mean": 0.0,
+                "mfcc_mean": [0.0] * 13,
+                "mfcc_std": [0.0] * 13,
+                "chroma_mean": [0.0] * 12,
+            }
+
+        # Choose an FFT size that will not trigger librosa's warning:
+        # "n_fft=2048 is too large for input signal of length=...".
+        # Use the largest power-of-two <= audio_len, capped at 2048.
+        n_fft_default = 2048
+        if audio_len >= 2:
+            n_fft = 2 ** int(math.floor(math.log2(audio_len)))
+        else:
+            n_fft = audio_len
+        n_fft = int(min(n_fft_default, max(2, min(n_fft, audio_len))))
+
+        hop_length_default = 512
+        hop_length = int(min(hop_length_default, max(1, n_fft // 4)))
+
         # Time-domain features
         features["rms"] = float(np.sqrt(np.mean(audio_mono**2)))
-        features["zcr"] = float(np.mean(librosa.feature.zero_crossing_rate(audio_mono)))
         features["energy"] = float(np.sum(audio_mono**2))
 
+        # Frame-based features (use safe n_fft/hop_length)
+        zcr = librosa.feature.zero_crossing_rate(
+            audio_mono,
+            frame_length=n_fft,
+            hop_length=hop_length,
+            center=True,
+        )
+        features["zcr"] = float(np.mean(zcr))
+
         # Spectral features
-        spectral_centroids = librosa.feature.spectral_centroid(y=audio_mono, sr=sample_rate)
+        spectral_centroids = librosa.feature.spectral_centroid(
+            y=audio_mono,
+            sr=sample_rate,
+            n_fft=n_fft,
+            hop_length=hop_length,
+            center=True,
+        )
         features["spectral_centroid_mean"] = float(np.mean(spectral_centroids))
         features["spectral_centroid_std"] = float(np.std(spectral_centroids))
 
-        spectral_rolloff = librosa.feature.spectral_rolloff(y=audio_mono, sr=sample_rate)
+        spectral_rolloff = librosa.feature.spectral_rolloff(
+            y=audio_mono,
+            sr=sample_rate,
+            n_fft=n_fft,
+            hop_length=hop_length,
+            center=True,
+        )
         features["spectral_rolloff_mean"] = float(np.mean(spectral_rolloff))
         features["spectral_rolloff_std"] = float(np.std(spectral_rolloff))
 
-        spectral_bandwidth = librosa.feature.spectral_bandwidth(y=audio_mono, sr=sample_rate)
+        spectral_bandwidth = librosa.feature.spectral_bandwidth(
+            y=audio_mono,
+            sr=sample_rate,
+            n_fft=n_fft,
+            hop_length=hop_length,
+            center=True,
+        )
         features["spectral_bandwidth_mean"] = float(np.mean(spectral_bandwidth))
 
-        # MFCCs
-        mfccs = librosa.feature.mfcc(y=audio_mono, sr=sample_rate, n_mfcc=13)
+        # MFCCs (kwargs forwarded to melspectrogram)
+        mfccs = librosa.feature.mfcc(
+            y=audio_mono,
+            sr=sample_rate,
+            n_mfcc=13,
+            n_fft=n_fft,
+            hop_length=hop_length,
+            center=True,
+        )
         features["mfcc_mean"] = [float(np.mean(mfccs[i])) for i in range(mfccs.shape[0])]
         features["mfcc_std"] = [float(np.std(mfccs[i])) for i in range(mfccs.shape[0])]
 
         # Chroma features
-        chroma = librosa.feature.chroma_stft(y=audio_mono, sr=sample_rate)
+        chroma = librosa.feature.chroma_stft(
+            y=audio_mono,
+            sr=sample_rate,
+            n_fft=n_fft,
+            hop_length=hop_length,
+            center=True,
+        )
         features["chroma_mean"] = [float(np.mean(chroma[i])) for i in range(chroma.shape[0])]
 
         return features
+
+    def precompute_bar_features(
+        self,
+        audio: np.ndarray,
+        sample_rate: int,
+        bar_boundaries: List[Tuple[int, float, float]],
+        hop_length: int = 512,
+        n_fft: int = 2048,
+    ) -> Dict[int, Dict[str, Any]]:
+        """
+        Precompute spectral/MFCC/chroma features once and aggregate per bar.
+
+        Returns a dict keyed by bar_index with feature dicts matching
+        extract_bar_features_from_audio() output (excluding metadata).
+        """
+        if not bar_boundaries:
+            return {}
+
+        if hop_length <= 0:
+            hop_length = 512
+        if n_fft <= 0:
+            n_fft = 2048
+
+        # Convert to mono for feature extraction
+        if audio.ndim == 2:
+            if audio.shape[0] <= 2:
+                audio_mono = librosa.to_mono(audio)
+            else:
+                audio_mono = np.mean(audio, axis=1)
+        else:
+            audio_mono = audio.flatten()
+
+        if audio_mono.size < 2:
+            return {}
+
+        if n_fft > audio_mono.size:
+            n_fft = int(audio_mono.size)
+        if n_fft < 2:
+            return {}
+
+        audio_mono = audio_mono.astype(np.float32, copy=False)
+        energy_cumsum = np.concatenate(([0.0], np.cumsum(audio_mono ** 2)))
+
+        zcr = librosa.feature.zero_crossing_rate(
+            audio_mono, frame_length=n_fft, hop_length=hop_length, center=True
+        )[0]
+        spectral_centroids = librosa.feature.spectral_centroid(
+            y=audio_mono, sr=sample_rate, n_fft=n_fft, hop_length=hop_length, center=True
+        )[0]
+        spectral_rolloff = librosa.feature.spectral_rolloff(
+            y=audio_mono, sr=sample_rate, n_fft=n_fft, hop_length=hop_length, center=True
+        )[0]
+        spectral_bandwidth = librosa.feature.spectral_bandwidth(
+            y=audio_mono, sr=sample_rate, n_fft=n_fft, hop_length=hop_length, center=True
+        )[0]
+        mfccs = librosa.feature.mfcc(
+            y=audio_mono,
+            sr=sample_rate,
+            n_mfcc=13,
+            n_fft=n_fft,
+            hop_length=hop_length,
+            center=True,
+        )
+        chroma = librosa.feature.chroma_stft(
+            y=audio_mono, sr=sample_rate, n_fft=n_fft, hop_length=hop_length, center=True
+        )
+
+        num_frames = zcr.shape[0]
+        if num_frames == 0:
+            return {}
+
+        features_by_bar: Dict[int, Dict[str, Any]] = {}
+        for bar_idx, start_s, end_s in bar_boundaries:
+            start_sample = max(0, int(round(start_s * sample_rate)))
+            end_sample = min(len(audio_mono), int(round(end_s * sample_rate)))
+            if end_sample <= start_sample:
+                continue
+
+            segment_len = end_sample - start_sample
+            segment_energy = float(energy_cumsum[end_sample] - energy_cumsum[start_sample])
+            rms = float(np.sqrt(segment_energy / segment_len)) if segment_len > 0 else 0.0
+
+            start_frame = int(librosa.time_to_frames(
+                start_s, sr=sample_rate, hop_length=hop_length, n_fft=n_fft
+            ))
+            end_frame = int(librosa.time_to_frames(
+                end_s, sr=sample_rate, hop_length=hop_length, n_fft=n_fft
+            )) + 1
+            start_frame = max(0, start_frame)
+            end_frame = min(num_frames, end_frame)
+            if end_frame <= start_frame:
+                continue
+
+            frame_slice = slice(start_frame, end_frame)
+
+            bar_features: Dict[str, Any] = {
+                "rms": rms,
+                "zcr": float(np.mean(zcr[frame_slice])),
+                "energy": segment_energy,
+                "spectral_centroid_mean": float(np.mean(spectral_centroids[frame_slice])),
+                "spectral_centroid_std": float(np.std(spectral_centroids[frame_slice])),
+                "spectral_rolloff_mean": float(np.mean(spectral_rolloff[frame_slice])),
+                "spectral_rolloff_std": float(np.std(spectral_rolloff[frame_slice])),
+                "spectral_bandwidth_mean": float(np.mean(spectral_bandwidth[frame_slice])),
+            }
+
+            mfcc_mean = []
+            mfcc_std = []
+            for i in range(mfccs.shape[0]):
+                mfcc_slice = mfccs[i, frame_slice]
+                mfcc_mean.append(float(np.mean(mfcc_slice)))
+                mfcc_std.append(float(np.std(mfcc_slice)))
+            bar_features["mfcc_mean"] = mfcc_mean
+            bar_features["mfcc_std"] = mfcc_std
+
+            chroma_mean = []
+            for i in range(chroma.shape[0]):
+                chroma_slice = chroma[i, frame_slice]
+                chroma_mean.append(float(np.mean(chroma_slice)))
+            bar_features["chroma_mean"] = chroma_mean
+
+            features_by_bar[int(bar_idx)] = bar_features
+
+        return features_by_bar
 
     def extract_bar_features_from_file(
         self, audio_path: Union[str, Path], sample_rate: int = 22050

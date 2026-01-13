@@ -31,15 +31,36 @@ See Also:
     - :mod:`didactic_engine.config` for preprocessing configuration
 """
 
-from typing import Tuple, TYPE_CHECKING
+from __future__ import annotations
+
+from typing import Any, Tuple, TYPE_CHECKING
 import numpy as np
-from pydub import AudioSegment
-from pydub.effects import normalize as pydub_normalize
-from pydub.silence import detect_nonsilent
 import librosa
 
 if TYPE_CHECKING:
     from didactic_engine.config import PipelineConfig
+    from pydub import AudioSegment
+
+
+def _require_pydub() -> tuple[Any, Any, Any]:
+    """Import pydub lazily.
+
+    We avoid importing pydub at module import time so that:
+    - environments that don't enable preprocessing aren't forced to load it
+    - test runs that skip preprocessing don't emit pydub-related warnings
+    """
+    try:
+        from pydub import AudioSegment
+        from pydub.effects import normalize as pydub_normalize
+        from pydub.silence import detect_nonsilent
+    except ImportError as exc:
+        raise RuntimeError(
+            "pydub is required for preprocessing but is not installed.\n"
+            "Install with: pip install pydub\n"
+            "Note: ffmpeg may also be required for non-WAV formats."
+        ) from exc
+
+    return AudioSegment, pydub_normalize, detect_nonsilent
 
 
 class AudioPreprocessor:
@@ -109,6 +130,8 @@ class AudioPreprocessor:
             scales accordingly. Very quiet signals or signals with DC offset
             may not reach exactly 1.0.
         """
+        AudioSegment, pydub_normalize, _detect_nonsilent = _require_pydub()
+
         # Convert to pydub AudioSegment
         audio_segment = self._numpy_to_audiosegment(audio, sample_rate)
 
@@ -161,6 +184,8 @@ class AudioPreprocessor:
         See Also:
             - :meth:`preprocess` for config-driven trimming
         """
+        AudioSegment, _pydub_normalize, detect_nonsilent = _require_pydub()
+
         # Convert to pydub AudioSegment
         audio_segment = self._numpy_to_audiosegment(audio, sample_rate)
 
@@ -342,7 +367,7 @@ class AudioPreprocessor:
 
     def _numpy_to_audiosegment(
         self, audio: np.ndarray, sample_rate: int
-    ) -> AudioSegment:
+    ) -> "AudioSegment":
         """Convert numpy array to pydub AudioSegment.
 
         Internal helper for using pydub's processing functions.
@@ -369,6 +394,8 @@ class AudioPreprocessor:
         # Convert to int16
         audio_int16 = (audio * 32767).astype(np.int16)
 
+        AudioSegment, _pydub_normalize, _detect_nonsilent = _require_pydub()
+
         # Create AudioSegment
         audio_segment = AudioSegment(
             audio_int16.tobytes(),
@@ -379,7 +406,7 @@ class AudioPreprocessor:
 
         return audio_segment
 
-    def _audiosegment_to_numpy(self, audio_segment: AudioSegment) -> np.ndarray:
+    def _audiosegment_to_numpy(self, audio_segment: "AudioSegment") -> np.ndarray:
         """Convert pydub AudioSegment back to numpy array.
 
         Internal helper for retrieving processed audio from pydub.

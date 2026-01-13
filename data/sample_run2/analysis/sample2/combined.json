@@ -1,0 +1,53 @@
+{
+  "song_id": "sample2",
+  "duration_s": 4.0,
+  "tempo_bpm": 0.0,
+  "num_beats": 0,
+  "num_bars": 0,
+  "stems": [
+    "full_mix"
+  ],
+  "num_notes_per_stem": {},
+  "essentia_requested": true,
+  "essentia_available": true,
+  "files_generated": [],
+  "step_timings": {
+    "step_1_copy_input_file": 0.019,
+    "step_2_ingest_wav_file": 0.011,
+    "step_3_preprocess_audio": 0.0,
+    "step_4_analyze_audio": 16.047,
+    "step_5_separate_stems_(demucs)": 0.0,
+    "step_6_compute_bar_boundaries": 0.0,
+    "step_7_process_stems_(chunks/transcription/align)": 0.006,
+    "step_8_build_datasets": 0.001,
+    "step_9_write_parquet_datasets": 0.004,
+    "step_10_export_reports": 0.002
+  },
+  "config": {
+    "analysis_sr": 22050,
+    "hop_length": 512,
+    "time_signature_num": 4,
+    "time_signature_den": 4,
+    "use_pydub_preprocess": false,
+    "use_essentia_features": true,
+    "write_bar_chunks": true,
+    "write_bar_chunk_wavs": false,
+    "preserve_chunk_audio": false,
+    "bar_feature_precompute": true,
+    "use_demucs_separation": false,
+    "demucs_model": "htdemucs",
+    "demucs_device": "cpu",
+    "demucs_timeout_s": null,
+    "use_basic_pitch_transcription": false,
+    "basic_pitch_backend": "tf",
+    "basic_pitch_timeout_s": null
+  },
+  "environment": {
+    "python": "3.11.9",
+    "platform": "Linux-5.15.167.4-microsoft-standard-WSL2-x86_64-with-glibc2.39"
+  },
+  "capabilities": {
+    "demucs_on_path": true,
+    "basic_pitch_on_path": true
+  }
+}

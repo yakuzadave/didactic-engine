@@ -82,6 +82,40 @@ This document tracks all documentation tasks for the didactic-engine project.
 
 ---
 
+## Phase 5: API Reference (In Progress)
+
+### Task 5.1: Create API Reference Doc
+- [x] Create `docs/06_API_REFERENCE.md` with module-by-module API overview
+- [x] Link API reference from `docs/00_README_DEV.md`
+- [x] Update `DOC_INVENTORY.md` and `STATUS.md`
+
+---
+
+## Phase 6: Patterns & Architectural Decisions (Complete ✓)
+
+### Task 6.1: Document patterns and decisions
+- [x] Create `docs/07_DESIGN_PATTERNS_AND_DECISIONS.md` (index)
+- [x] Create `docs/07_DESIGN_PATTERNS.md`
+- [x] Create `docs/08_ANTI_PATTERNS.md`
+- [x] Create `docs/adr/README.md` and ADRs 0001-0006
+- [x] Link from `docs/00_README_DEV.md`
+- [x] Update `DOC_INVENTORY.md` and `STATUS.md`
+
+---
+
+## Phase 7: Knowledge Graph & Dependency Maps (Complete ✓)
+
+### Task 7.1: Generate knowledge graph + visual dependency maps
+- [x] Add `tools/knowledge_graph/build_knowledge_graph.py`
+- [x] Add `tools/knowledge_graph/render_dependency_maps.py`
+- [x] Add docs entrypoint `docs/knowledge_graph/README.md`
+- [x] Generate `docs/knowledge_graph/output/knowledge_graph.{json,graphml}`
+- [x] Generate `docs/09_DEPENDENCY_MAPS.md`
+- [x] Link from `docs/00_README_DEV.md`
+- [x] Update `DOC_INVENTORY.md` and `STATUS.md`
+
+---
+
 ## Notes
 
 - Focus on Google-style docstrings for consistency

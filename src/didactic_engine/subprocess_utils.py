@@ -28,7 +28,23 @@ class CommandResult:
 
 
 def format_cmd(cmd: Sequence[str]) -> str:
-    """Format a command for logs/errors."""
+    """Format a command sequence into a shell-quoted string for logs/errors.
+
+    Each element of the command is converted to ``str`` and passed through
+    :func:`shlex.quote` so that arguments containing spaces or special shell
+    characters are represented safely in log messages and error reports.
+
+    This helper is intended only for human-readable output; the returned
+    string should not be re-parsed and executed by a shell.
+
+    Args:
+        cmd: Command tokens (program name followed by arguments), typically
+            a sequence of strings as passed to :func:`subprocess.run`.
+
+    Returns:
+        A single string with all command tokens joined by spaces and
+        shell-quoted for safe inclusion in logs and error messages.
+    """
     return " ".join(shlex.quote(str(c)) for c in cmd)
 
 
