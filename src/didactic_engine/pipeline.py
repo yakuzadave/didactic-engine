@@ -1069,27 +1069,25 @@ class AudioPipeline:
         if not entries:
             for stem_name in results.get("stems", []):
                 abc_text = abc_texts.get(stem_name, "NA")
-                stem_path_key = f"midi_{stem_name}"
                 
-                if stem_path_key in results:
-                    # Use stem audio file as the audio reference
-                    stem_path = Path(results[stem_path_key]).parent.parent / "stems" / cfg.song_id / f"{stem_name}.wav"
-                    if stem_path.exists():
-                        try:
-                            file_name = stem_path.relative_to(cfg.out_dir).as_posix()
-                        except ValueError:
-                            file_name = stem_path.as_posix()
-                        
-                        entry = create_metadata_entry(
-                            file_name=file_name,
-                            abc_text=abc_text,
-                            source_track=cfg.input_wav.name,
-                            stem_used=stem_name,
-                            tempo_bpm=tempo_bpm,
-                            sample_rate=cfg.analysis_sr,
-                            trigger_token=cfg.abc_trigger_token,
-                        )
-                        entries.append(entry)
+                # Use stem audio file as the audio reference; derive from cfg.stems_dir
+                stem_path = cfg.stems_dir / f"{stem_name}.wav"
+                if stem_path.exists():
+                    try:
+                        file_name = stem_path.relative_to(cfg.out_dir).as_posix()
+                    except ValueError:
+                        file_name = stem_path.as_posix()
+                    
+                    entry = create_metadata_entry(
+                        file_name=file_name,
+                        abc_text=abc_text,
+                        source_track=cfg.input_wav.name,
+                        stem_used=stem_name,
+                        tempo_bpm=tempo_bpm,
+                        sample_rate=cfg.analysis_sr,
+                        trigger_token=cfg.abc_trigger_token,
+                    )
+                    entries.append(entry)
         
         # Export to JSONL
         if entries:

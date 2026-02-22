@@ -91,6 +91,10 @@ def build_abc_prompt(
     See Also:
         - :func:`create_metadata_entry` for complete entry creation
     """
+    # Validate inputs
+    if max_chars <= 0:
+        raise ValueError(f"max_chars must be positive, got {max_chars}")
+    
     # Trim whitespace
     abc_text = abc_text.strip()
     

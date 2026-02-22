@@ -1218,7 +1218,6 @@ class TestMetadataExport:
     def test_export_metadata_jsonl(self):
         """Test JSONL export."""
         from didactic_engine.metadata_export import export_metadata_jsonl, load_metadata_jsonl
-        import tempfile
         from pathlib import Path
         
         entries = [

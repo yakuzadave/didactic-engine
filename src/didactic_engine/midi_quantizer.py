@@ -95,6 +95,13 @@ def quantize_notes(
     See Also:
         - :func:`quantize_midi_file` for file-based quantization
     """
+    # Validate inputs
+    if tempo_bpm <= 0:
+        raise ValueError(f"tempo_bpm must be positive, got {tempo_bpm}")
+    
+    if division <= 0:
+        raise ValueError(f"division must be positive, got {division}")
+    
     if notes_df.empty:
         return notes_df
     
@@ -178,7 +185,7 @@ def quantize_midi_file(
     try:
         import pretty_midi
     except ImportError:
-        print("Warning: pretty_midi not installed. Quantization skipped.")
+        logger.warning("pretty_midi not installed. MIDI quantization skipped.")
         return False
     
     try:
@@ -208,5 +215,5 @@ def quantize_midi_file(
         return True
         
     except Exception as e:
-        print(f"Warning: MIDI quantization failed: {e}")
+        logger.warning("MIDI quantization failed for %s: %s", input_path, e)
         return False

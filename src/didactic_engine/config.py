@@ -146,6 +146,17 @@ class PipelineConfig:
                 f"basic_pitch_timeout_s cannot be negative, got {self.basic_pitch_timeout_s}"
             )
 
+        # Validate ABC-related parameters
+        if self.quantize_division not in (4, 8, 12, 16, 24):
+            raise ValueError(
+                f"quantize_division must be one of (4, 8, 12, 16, 24), got {self.quantize_division}"
+            )
+
+        if self.abc_max_chars <= 0:
+            raise ValueError(
+                f"abc_max_chars must be positive, got {self.abc_max_chars}"
+            )
+
         if self.preprocess_silence_thresh_dbfs > 0:
             raise ValueError(
                 f"preprocess_silence_thresh_dbfs must be negative (dBFS), "

@@ -41,7 +41,6 @@ See Also:
 
 import os
 from typing import Optional
-from pathlib import Path
 
 try:
     import music21
@@ -85,8 +84,7 @@ def export_abc(
         - :func:`export_abc_from_notes` for note-list input
     """
     if not MUSIC21_AVAILABLE:
-        print("Warning: music21 is not installed. ABC export skipped.")
-        print("Install with: pip install music21")
+        logger.warning("music21 is not installed. ABC export skipped. Install with: pip install music21")
         _write_error_file(output_path, "music21 not installed")
         return False
 
@@ -110,7 +108,7 @@ def export_abc(
         return True
 
     except Exception as e:
-        print(f"Warning: ABC export failed for {midi_path}: {e}")
+        logger.warning("ABC export failed for %s: %s", midi_path, e)
         _write_error_file(output_path, str(e))
         return False
 
@@ -144,7 +142,7 @@ def export_abc_text(
         - :func:`export_abc` for writing to a file
     """
     if not MUSIC21_AVAILABLE:
-        print("Warning: music21 is not installed. ABC export skipped.")
+        logger.warning("music21 is not installed. ABC export skipped.")
         return None
 
     try:
@@ -163,7 +161,7 @@ def export_abc_text(
         return abc_text
 
     except Exception as e:
-        print(f"Warning: ABC export to text failed for {midi_path}: {e}")
+        logger.warning("ABC export to text failed for %s: %s", midi_path, e)
         return None
 
 
@@ -213,7 +211,7 @@ def export_abc_from_notes(
         - :func:`export_abc` for MIDI file input
     """
     if not MUSIC21_AVAILABLE:
-        print("Warning: music21 is not installed. ABC export skipped.")
+        logger.warning("music21 is not installed. ABC export skipped.")
         _write_error_file(output_path, "music21 not installed")
         return False
 
@@ -255,7 +253,7 @@ def export_abc_from_notes(
         return True
 
     except Exception as e:
-        print(f"Warning: ABC export from notes failed: {e}")
+        logger.warning("ABC export from notes failed: %s", e)
         _write_error_file(output_path, str(e))
         return False
 
