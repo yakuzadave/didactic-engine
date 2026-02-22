@@ -1118,6 +1118,54 @@ class TestStemSelector:
         
         assert score == 0.0, "Short audio should score 0.0"
 
+    def test_select_best_melody_stem(self):
+        """Test stem selection with multiple stems."""
+        from didactic_engine.stem_selector import select_best_melody_stem
+        from pathlib import Path
+        
+        # Create temporary audio files
+        sr = 22050
+        duration = 2.0
+        t = np.linspace(0, duration, int(duration * sr))
+        
+        # Create different stems with different characteristics
+        vocals = np.sin(2 * np.pi * 440 * t).astype(np.float32)  # Clear tone
+        drums = np.random.randn(len(t)).astype(np.float32) * 0.1  # Noise
+        other = np.sin(2 * np.pi * 220 * t).astype(np.float32) * 0.5  # Lower tone
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            
+            # Write stem files
+            vocals_path = tmppath / "vocals.wav"
+            drums_path = tmppath / "drums.wav"
+            other_path = tmppath / "other.wav"
+            
+            sf.write(vocals_path, vocals, sr)
+            sf.write(drums_path, drums, sr)
+            sf.write(other_path, other, sr)
+            
+            stem_paths = {
+                "vocals": vocals_path,
+                "drums": drums_path,
+                "other": other_path,
+            }
+            
+            # Select best stem
+            best_stem, best_path, scores = select_best_melody_stem(
+                stem_paths, sample_rate=sr, candidate_stems=("vocals", "drums", "other")
+            )
+            
+            # Vocals should win (clearest tone)
+            assert best_stem == "vocals", f"Expected vocals, got {best_stem}"
+            assert best_path == vocals_path
+            assert "vocals" in scores
+            assert "drums" in scores
+            assert "other" in scores
+            # Vocals should have highest score
+            assert scores["vocals"] > scores["drums"]
+            assert scores["vocals"] > 0.3  # Should have decent score
+
 
 class TestMIDIQuantizer:
     """Test MIDI quantization functionality."""
@@ -1280,3 +1328,155 @@ class TestExportABCText:
             if abc_text is not None:
                 assert isinstance(abc_text, str)
                 assert len(abc_text) > 0
+
+
+class TestABCValidator:
+    """Test ABC notation validation functionality."""
+
+    def test_valid_abc(self):
+        """Test validation of valid ABC notation."""
+        from didactic_engine.abc_validator import validate_abc
+        
+        abc = """X:1
+T:Test Tune
+M:4/4
+L:1/8
+K:C
+|CDEF GABC|CDEF GABC|"""
+        
+        result = validate_abc(abc)
+        assert result.is_valid
+        assert len(result.errors) == 0
+        assert result.metadata['meter'] == '4/4'
+        assert result.metadata['unit_length'] == '1/8'
+        assert result.metadata['key'] == 'C'
+
+    def test_missing_meter(self):
+        """Test detection of missing meter."""
+        from didactic_engine.abc_validator import validate_abc
+        
+        abc = """X:1
+T:Test
+L:1/8
+K:C
+|CDEF|"""
+        
+        result = validate_abc(abc)
+        assert not result.is_valid
+        assert any('M:' in err for err in result.errors)
+
+    def test_missing_unit_length(self):
+        """Test detection of missing unit length."""
+        from didactic_engine.abc_validator import validate_abc
+        
+        abc = """X:1
+M:4/4
+K:C
+|CDEF|"""
+        
+        result = validate_abc(abc)
+        assert not result.is_valid
+        assert any('L:' in err for err in result.errors)
+
+    def test_missing_key(self):
+        """Test detection of missing key."""
+        from didactic_engine.abc_validator import validate_abc
+        
+        abc = """X:1
+M:4/4
+L:1/8
+|CDEF|"""
+        
+        result = validate_abc(abc)
+        assert not result.is_valid
+        assert any('K:' in err for err in result.errors)
+
+    def test_check_meter_math(self):
+        """Test meter math validation."""
+        from didactic_engine.abc_validator import check_meter_math
+        
+        # Valid: M:4/4, L:1/8 = 8 units per bar
+        abc = """X:1
+M:4/4
+L:1/8
+K:C
+|CDEFGABC|"""
+        
+        result = check_meter_math(abc, meter='4/4', unit_length='1/8')
+        assert result.is_valid
+        # May have warnings for approximation, but no errors
+        assert len(result.errors) == 0
+
+    def test_multivoice_detection(self):
+        """Test detection of multi-voice ABC."""
+        from didactic_engine.abc_validator import _is_multivoice
+        
+        single_voice = """X:1
+M:4/4
+L:1/8
+K:C
+|CDEF|"""
+        
+        multi_voice = """X:1
+M:4/4
+L:1/8
+K:C
+V:1
+|CDEF|
+V:2
+|GABC|"""
+        
+        assert not _is_multivoice(single_voice)
+        assert _is_multivoice(multi_voice)
+
+    def test_header_validation(self):
+        """Test header field validation."""
+        from didactic_engine.abc_validator import check_header
+        
+        # Valid header
+        abc = """X:1
+M:4/4
+L:1/8
+K:C
+|CDEF|"""
+        
+        result = check_header(abc)
+        assert result.is_valid
+        assert result.metadata['meter'] == '4/4'
+        assert result.metadata['unit_length'] == '1/8'
+        assert result.metadata['key'] == 'C'
+
+    def test_invalid_meter_format(self):
+        """Test detection of invalid meter format."""
+        from didactic_engine.abc_validator import check_header
+        
+        abc = """X:1
+M:invalid
+L:1/8
+K:C"""
+        
+        result = check_header(abc)
+        assert not result.is_valid
+        assert any('meter format' in err.lower() for err in result.errors)
+
+    def test_strict_mode(self):
+        """Test strict mode treats warnings as errors."""
+        from didactic_engine.abc_validator import validate_abc
+        
+        # ABC with potential warnings (incomplete bars)
+        abc = """X:1
+M:4/4
+L:1/8
+K:C
+|CD|"""
+        
+        # Non-strict: may have warnings but valid
+        result_normal = validate_abc(abc, strict=False)
+        
+        # Strict: warnings become errors
+        result_strict = validate_abc(abc, strict=True)
+        
+        # If there were warnings, strict mode should fail
+        if result_normal.warnings:
+            assert not result_strict.is_valid
+            assert len(result_strict.errors) > 0
