@@ -40,7 +40,10 @@ See Also:
 """
 
 import os
+import logging
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 try:
     import music21
