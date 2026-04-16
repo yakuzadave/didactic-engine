@@ -7,7 +7,7 @@ output directory paths.
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -54,6 +54,14 @@ class PipelineConfig:
             Must be non-negative. Increase for very long audio files.
         bar_feature_precompute: Whether to precompute spectral/MFCC/chroma features once per stem
             and aggregate them per bar for faster processing. Default True.
+        quantize_midi: Whether to quantize MIDI notes before ABC export.
+        quantize_division: Rhythmic division for quantization (16=sixteenth notes, 8=eighth notes).
+        quantize_min_duration: Optional minimum note duration in seconds after quantization.
+        use_stem_selector: Whether to use automatic stem selection for melody transcription.
+        stem_selector_candidates: Tuple of stem names to consider for melody selection.
+        export_metadata_jsonl: Whether to export metadata.jsonl for HuggingFace AudioFolder.
+        abc_trigger_token: Trigger token for ABC-based prompts (default "abcstyle").
+        abc_max_chars: Maximum characters for ABC text in prompts (default 2500).
     """
 
     song_id: str
@@ -84,6 +92,14 @@ class PipelineConfig:
     demucs_timeout_s: float = 3600.0  # 1 hour default (can be overridden for large files)
     basic_pitch_timeout_s: float = 1800.0  # 30 minutes default
     bar_feature_precompute: bool = True
+    quantize_midi: bool = False
+    quantize_division: int = 16
+    quantize_min_duration: Optional[float] = None
+    use_stem_selector: bool = False
+    stem_selector_candidates: Tuple[str, ...] = ("vocals", "other", "bass")
+    export_metadata_jsonl: bool = False
+    abc_trigger_token: str = "abcstyle"
+    abc_max_chars: int = 2500
 
     def __post_init__(self) -> None:
         """Convert string paths to Path objects and validate configuration."""
@@ -128,6 +144,17 @@ class PipelineConfig:
         if self.basic_pitch_timeout_s < 0:
             raise ValueError(
                 f"basic_pitch_timeout_s cannot be negative, got {self.basic_pitch_timeout_s}"
+            )
+
+        # Validate ABC-related parameters
+        if self.quantize_division not in (4, 8, 12, 16, 24):
+            raise ValueError(
+                f"quantize_division must be one of (4, 8, 12, 16, 24), got {self.quantize_division}"
+            )
+
+        if self.abc_max_chars <= 0:
+            raise ValueError(
+                f"abc_max_chars must be positive, got {self.abc_max_chars}"
             )
 
         if self.preprocess_silence_thresh_dbfs > 0:
